@@ -49,7 +49,7 @@ const date = z.coerce.date();
 export const createTimeEntrySchema = z.object({
   taskId: objectId,
   defectId: objectId.optional(),
-  employeeId: objectId,
+  employeeId: objectId.optional(),
   date,
   hours: z.number().finite().positive().max(24),
   description: z.string().trim().max(2000).optional(),
