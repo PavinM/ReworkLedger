@@ -252,7 +252,8 @@ function App() {
             <button className="period-pill" onClick={() => setToast('Payroll period: May 04 – May 17, 2026')}><Clock3 size={14} /><span>May 04 – May 17</span></button>
             <button className="theme-toggle icon-button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
             <div className="popover-wrap"><button className="icon-button notification-button" onClick={() => setShowNotifications(!showNotifications)} aria-expanded={showNotifications} aria-label="Notifications"><Bell size={17} /><span className="notification-dot" /></button>{showNotifications && <Popover title="Notifications"><p>4 payroll reviews are waiting for your attention.</p><button onClick={() => setShowNotifications(false)}>Mark as read</button></Popover>}</div>
-            <div className="popover-wrap"><button className="top-profile" onClick={() => setShowProfile(!showProfile)} aria-expanded={showProfile}><span className="avatar avatar-lime">{profileInitials}</span><span className="profile-name">{authUser.name}</span><ChevronDown size={13} /></button>{showProfile && <Popover title={authUser.name}><p>{profileRole} · {authUser.email}</p><button onClick={() => setShowProfile(false)}>Open account settings</button></Popover>}</div>
+            <div className="popover-wrap"><button className="top-profile" onClick={() => setShowProfile(!showProfile)} aria-expanded={showProfile}><span className="avatar avatar-lime">{profileInitials}</span><span className="profile-name">{authUser.name}</span><ChevronDown size={13} /></button>{showProfile && <Popover title={authUser.name}><p>{profileRole} · {authUser.email}</p><button onClick={() => { setActivePage('Settings'); setShowProfile(false) }}>Open account settings</button></Popover>}</div>
+            <button className="logout-button topbar-logout" onClick={logout}><LogOut size={13} /><span>Log out</span></button>
           </div>
         </header>
 
@@ -291,7 +292,7 @@ function App() {
           {activePage === 'Defects' && <DefectsPanel tasks={tasks} defects={liveDefects} currentUser={authUser} onChanged={retryData} onNotify={setToast} />}
           {activePage === 'Audit trail' && <AuditPanel logs={auditLogs} />}
           {activePage === 'Quality intelligence' && <QualityPanel defects={liveDefects} entries={timeEntries} />}
-          {activePage === 'Settings' && <SettingsPanel currentUser={authUser} onLogout={logout} showToast={setToast} />}
+          {activePage === 'Settings' && <SettingsPanel currentUser={authUser} onLogout={logout} onProfileUpdated={setAuthUser} showToast={setToast} />}
           {activePage === 'Salary adjustments' && (authUser.role === 'manager' || authUser.role === 'admin') && <PayrollReviewPanel adjustments={payrollAdjustments} />}
           {activePage === 'Salary adjustments' && authUser.role === 'employee' && <EmployeePayrollView adjustments={payrollAdjustments} />}
           <footer className="page-footer"><span><ShieldCheck size={13} /> Evidence-based workflow with manager review.</span><span>ReworkLedger · v1.0.0</span><button className="logout-button" onClick={logout}><LogOut size={13} /> Log out</button></footer>
@@ -336,16 +337,42 @@ function QualityPanel({ defects, entries }: { defects: ApiDefect[]; entries: Tim
   return <section className="workflow-grid"><article className="surface workflow-list"><div className="section-heading"><div><h2>Quality intelligence</h2><p>Live, database-backed quality and rework indicators.</p></div></div><div className="overview-strip"><OverviewMetric label="Total defects" value={String(defects.length)} note="Current workspace" icon={AlertCircle} accent="danger" /><OverviewMetric label="Corrective hours" value={`${correctiveHours.toFixed(2)}h`} note="All submitted entries" icon={Timer} accent="amber" /><OverviewMetric label="Approved hours" value={`${approvedHours.toFixed(2)}h`} note="Eligible for proposals" icon={Check} accent="lime" /></div><h3>Defects by cause</h3>{Object.entries(causes).map(([cause, count]) => <div className="workflow-row" key={cause}><strong>{cause.replaceAll('_', ' ')}</strong><span className="status status-warning"><i />{count}</span></div>)}</article></section>
 }
 
-function SettingsPanel({ currentUser, onLogout, showToast }: { currentUser: AuthUser; onLogout: () => void; showToast: (message: string) => void }) {
+function SettingsPanel({ currentUser, onLogout, onProfileUpdated, showToast }: { currentUser: AuthUser; onLogout: () => void; onProfileUpdated: (user: AuthUser) => void; showToast: (message: string) => void }) {
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [loadingUsers, setLoadingUsers] = useState(currentUser.role === 'admin')
   const [creating, setCreating] = useState(false)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [profileForm, setProfileForm] = useState({ name: currentUser.name, email: currentUser.email, currentPassword: '', newPassword: '', confirmPassword: '' })
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'employee' as 'employee' | 'manager' })
 
   useEffect(() => {
     if (currentUser.role !== 'admin') return
     api.listUsers().then(setUsers).catch((error) => showToast(error instanceof Error ? error.message : 'Unable to load users')).finally(() => setLoadingUsers(false))
   }, [currentUser.role, showToast])
+
+  const updateProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (profileForm.newPassword !== profileForm.confirmPassword) {
+      showToast('New password and confirmation do not match')
+      return
+    }
+    setSavingProfile(true)
+    try {
+      const result = await api.updateOwnProfile({
+        name: profileForm.name,
+        email: profileForm.email,
+        currentPassword: profileForm.currentPassword,
+        ...(profileForm.newPassword ? { newPassword: profileForm.newPassword } : {}),
+      })
+      onProfileUpdated(result.user)
+      setProfileForm({ name: result.user.name, email: result.user.email, currentPassword: '', newPassword: '', confirmPassword: '' })
+      showToast('Profile updated successfully')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to update profile')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
 
   const createUser = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -376,7 +403,15 @@ function SettingsPanel({ currentUser, onLogout, showToast }: { currentUser: Auth
     <article className="surface workflow-form">
       <div className="section-heading"><div><h2>Account settings</h2><p>Your authenticated profile and server-enforced role.</p></div></div>
       <div className="demo-hint"><span>Access role</span><strong>{roleLabels[currentUser.role]}</strong></div>
-      <label>Name<input readOnly value={currentUser.name} /></label><label>Email<input readOnly value={currentUser.email} /></label><label>User ID<input readOnly value={currentUser.id} /></label>
+      <form className="workflow-form profile-edit-form" onSubmit={updateProfile}>
+        <label>Username<input required maxLength={160} value={profileForm.name} onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })} /></label>
+        <label>Email<input required type="email" maxLength={320} value={profileForm.email} onChange={(event) => setProfileForm({ ...profileForm, email: event.target.value })} /></label>
+        <label>Current password<input required type="password" autoComplete="current-password" value={profileForm.currentPassword} onChange={(event) => setProfileForm({ ...profileForm, currentPassword: event.target.value })} /></label>
+        <label>New password <span className="field-hint">(leave blank to keep current)</span><input minLength={6} type="password" autoComplete="new-password" value={profileForm.newPassword} onChange={(event) => setProfileForm({ ...profileForm, newPassword: event.target.value })} /></label>
+        {profileForm.newPassword && <label>Confirm new password<input required minLength={6} type="password" autoComplete="new-password" value={profileForm.confirmPassword} onChange={(event) => setProfileForm({ ...profileForm, confirmPassword: event.target.value })} /></label>}
+        <button className="export-button" disabled={savingProfile}>{savingProfile ? 'Saving…' : 'Save profile'}</button>
+      </form>
+      <label>User ID<input readOnly value={currentUser.id} /></label>
       <button className="logout-button" onClick={onLogout}><LogOut size={13} /> Log out</button>
     </article>
     {currentUser.role === 'admin' && <article className="surface workflow-list">

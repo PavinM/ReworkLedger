@@ -66,3 +66,20 @@ export const me: RequestHandler = async (req, res) => {
   if (!user || !user.active) throw new HttpError(401, 'User account is unavailable');
   res.json({ data: { user: publicUser(user) } });
 };
+
+export const updateOwnProfile: RequestHandler = async (req, res) => {
+  const user = await User.findById(req.user!.id).select('+passwordHash');
+  if (!user || !user.active) throw new HttpError(401, 'User account is unavailable');
+  if (!(await bcrypt.compare(req.body.currentPassword, user.passwordHash))) {
+    throw new HttpError(403, 'Current password is incorrect');
+  }
+  if (req.body.email && req.body.email !== user.email) {
+    const existing = await User.exists({ email: req.body.email, _id: { $ne: user._id } });
+    if (existing) throw new HttpError(409, 'An account with this email already exists');
+    user.email = req.body.email;
+  }
+  if (req.body.name) user.name = req.body.name;
+  if (req.body.newPassword) user.passwordHash = await bcrypt.hash(req.body.newPassword, 12);
+  await user.save();
+  res.json({ data: { user: publicUser(user) } });
+};

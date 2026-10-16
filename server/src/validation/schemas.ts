@@ -65,10 +65,16 @@ export const reviewDefectSchema = z.object({
 export const resolveDefectSchema = z.object({
   resolutionDescription: z.string().trim().min(1).max(4000),
   resolutionEvidence: z.string().trim().min(1).max(4000),
+  resolutionHours: z.number().finite().positive().max(24),
 });
 
 export const acceptDefectResolutionSchema = z.object({
   reviewReason: z.string().trim().max(2000).optional(),
+});
+
+export const backfillResolvedDefectHoursSchema = z.object({
+  hours: z.number().finite().positive().max(24),
+  reviewReason: z.string().trim().min(1).max(2000),
 });
 
 export const reviewFindingSchema = z.object({
@@ -163,4 +169,15 @@ export const createStaffSchema = z.object({
 
 export const updateUserStatusSchema = z.object({
   active: z.boolean(),
+});
+
+export const updateOwnProfileSchema = z.object({
+  currentPassword: z.string().min(6).max(200),
+  name: z.string().trim().min(1).max(160).optional(),
+  email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()).optional(),
+  newPassword: z.string().min(6).max(200).optional(),
+}).superRefine((value, context) => {
+  if (!value.name && !value.email && !value.newPassword) {
+    context.addIssue({ code: 'custom', path: [], message: 'Enter a profile change to save' });
+  }
 });

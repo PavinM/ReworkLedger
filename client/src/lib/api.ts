@@ -47,6 +47,10 @@ export type Defect = {
   module: string
   description?: string
   debugInstructions?: string
+  resolutionDescription?: string
+  resolutionEvidence?: string
+  resolutionHours?: number
+  resolutionSubmittedAt?: string
   severity: 'low' | 'medium' | 'high' | 'critical'
   cause: 'code_defect' | 'requirement_change' | 'external_dependency' | 'other'
   status: 'reported' | 'under_review' | 'approved' | 'exempted' | 'resolved'
@@ -217,6 +221,10 @@ export const api = {
     return data.user
   },
   me: () => request<{ user: AuthUser }>('/api/auth/me'),
+  updateOwnProfile: (payload: { currentPassword: string; name?: string; email?: string; newPassword?: string }) => request<{ user: AuthUser }>('/api/auth/me/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }),
   listUsers: () => request<ManagedUser[]>('/api/auth/users'),
   createStaff: (payload: { name: string; email: string; password: string; role: 'employee' | 'manager' }) => request<{ user: AuthUser }>('/api/auth/users', {
     method: 'POST',
@@ -260,8 +268,9 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify(payload),
   }),
-  submitDefectResolution: (defectId: string, payload: { resolutionDescription: string; resolutionEvidence: string }) => request<Defect>(`/api/defects/${defectId}/resolve`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  submitDefectResolution: (defectId: string, payload: { resolutionDescription: string; resolutionEvidence: string; resolutionHours: number }) => request<Defect>(`/api/defects/${defectId}/resolve`, { method: 'PATCH', body: JSON.stringify(payload) }),
   acceptDefectResolution: (defectId: string, reviewReason?: string) => request<Defect>(`/api/defects/${defectId}/accept-resolution`, { method: 'PATCH', body: JSON.stringify({ reviewReason }) }),
+  recordResolvedDefectHours: (defectId: string, payload: { hours: number; reviewReason: string }) => request<{ defect: Defect; adjustment: PayrollAdjustment }>(`/api/defects/${defectId}/resolution-hours`, { method: 'PATCH', body: JSON.stringify(payload) }),
   listAnalysisScans: (taskId: string, signal?: AbortSignal) => request<AnalysisScan[]>(`/api/analysis/tasks/${taskId}/scans`, { signal }),
   uploadAnalysis: (taskId: string, payload: { project: File; versionRef?: string; expectedBehavior?: string; description?: string }) => {
     const formData = new FormData()
