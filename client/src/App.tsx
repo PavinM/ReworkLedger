@@ -40,6 +40,7 @@ import './App.css'
 type IconComponent = typeof LayoutDashboard
 type LoginRole = AuthUser['role']
 type NavItem = { label: string; icon: IconComponent; badge?: string }
+const roleLabels: Record<LoginRole, string> = { employee: 'Employee', manager: 'Manager', admin: 'Administrator' }
 const loginRoles: Array<{ role: LoginRole; label: string; description: string; icon: typeof UserRound; email: string }> = [
   { role: 'employee', label: 'Employee', description: 'Log work and follow corrective tasks.', icon: UserRound, email: 'employee.demo@reworkledger.local' },
   { role: 'manager', label: 'Manager', description: 'Review quality signals and approvals.', icon: BriefcaseBusiness, email: 'manager.demo@reworkledger.local' },
@@ -204,6 +205,8 @@ function App() {
     return groups
   }, new Map<string, { name: string; defects: number }>()).values())
     .map((module, index) => ({ ...module, width: Math.max(20, 100 - index * 18) }))
+  const profileInitials = authUser ? authUser.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() : ''
+  const profileRole = authUser ? roleLabels[authUser.role] : ''
 
   if (!authUser) return (
     <main className="auth-screen">
@@ -250,7 +253,7 @@ function App() {
             <button className="period-pill" onClick={() => setToast('Payroll period: May 04 – May 17, 2026')}><Clock3 size={14} /><span>May 04 – May 17</span></button>
             <button className="theme-toggle icon-button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
             <div className="popover-wrap"><button className="icon-button notification-button" onClick={() => setShowNotifications(!showNotifications)} aria-expanded={showNotifications} aria-label="Notifications"><Bell size={17} /><span className="notification-dot" /></button>{showNotifications && <Popover title="Notifications"><p>4 payroll reviews are waiting for your attention.</p><button onClick={() => setShowNotifications(false)}>Mark as read</button></Popover>}</div>
-            <div className="popover-wrap"><button className="top-profile" onClick={() => setShowProfile(!showProfile)} aria-expanded={showProfile}><span className="avatar avatar-lime">MS</span><span className="profile-name">Morgan Silva</span><ChevronDown size={13} /></button>{showProfile && <Popover title="Morgan Silva"><p>Administrator · Acme Corporation</p><button onClick={() => setShowProfile(false)}>Open account settings</button></Popover>}</div>
+            <div className="popover-wrap"><button className="top-profile" onClick={() => setShowProfile(!showProfile)} aria-expanded={showProfile}><span className="avatar avatar-lime">{profileInitials}</span><span className="profile-name">{authUser.name}</span><ChevronDown size={13} /></button>{showProfile && <Popover title={authUser.name}><p>{profileRole} · {authUser.email}</p><button onClick={() => setShowProfile(false)}>Open account settings</button></Popover>}</div>
           </div>
         </header>
 
