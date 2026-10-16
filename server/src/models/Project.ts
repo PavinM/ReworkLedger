@@ -4,6 +4,9 @@ import { projectStatuses, type ProjectStatus } from '../types/domain.js';
 export interface ProjectDocument extends Document {
   name: string;
   description?: string;
+  githubUrl?: string;
+  deadline?: Date;
+  assignedEmployeeId?: Types.ObjectId;
   status: ProjectStatus;
   managerId: Types.ObjectId;
   createdAt: Date;
@@ -14,6 +17,9 @@ const projectSchema = new Schema<ProjectDocument>(
   {
     name: { type: String, required: true, trim: true, minlength: 1, maxlength: 160 },
     description: { type: String, trim: true, maxlength: 2000 },
+    githubUrl: { type: String, trim: true, maxlength: 500 },
+    deadline: { type: Date },
+    assignedEmployeeId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
     status: { type: String, enum: projectStatuses, default: 'active', required: true },
     managerId: { type: Schema.Types.ObjectId, required: true, index: true, ref: 'User' },
   },

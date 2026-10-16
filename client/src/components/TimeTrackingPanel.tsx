@@ -20,6 +20,7 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
   const [submitting, setSubmitting] = useState(false)
   const completedTasks = tasks.filter((task) => task.status === 'completed' || task.status === 'reopened' || task.status === 'under_fix')
   const eligibleDefects = defects.filter((defect) => defect.status === 'approved' && defect.taskId === taskId)
+  const canReview = currentUser.role === 'manager' || currentUser.role === 'admin'
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -43,6 +44,19 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
     } finally {
       setSubmitting(false)
     }
+
+  }
+
+  const review = async (entry: TimeEntry, approvalStatus: 'approved' | 'rejected') => {
+    const reviewReason = approvalStatus === 'rejected' ? window.prompt('Reason for rejection') || '' : undefined
+    if (approvalStatus === 'rejected' && !reviewReason) return
+    try {
+      await api.reviewTimeEntry(entry._id, { approvalStatus, reviewedBy: currentUser.id, reviewReason })
+      onNotify(`Time entry ${approvalStatus}`)
+      onChanged()
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : 'Unable to review time entry')
+    }
   }
 
   return <section className="workflow-grid">
@@ -54,6 +68,6 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
       <label>Description<textarea required minLength={1} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the corrective work" /></label>
       <button className="export-button" disabled={submitting} type="submit"><Send size={14} />{submitting ? 'Submitting…' : 'Submit for approval'}</button>
     </form></article>
-    <article className="surface workflow-list"><div className="section-heading"><div><h2>Time entries</h2><p>Approval status is always read from the API.</p></div></div>{entries.length ? entries.map((entry) => <div className="workflow-row" key={entry._id}><div><strong>{entry.hours.toFixed(2)}h · {entry.category.replace('_', ' ')}</strong><small>{new Date(entry.date).toLocaleDateString()} · {entry.description || 'No description'}</small></div><span className={`status status-${entry.approvalStatus === 'approved' ? 'success' : entry.approvalStatus === 'rejected' ? 'danger' : 'warning'}`}><i />{entry.approvalStatus}</span></div>) : <div className="empty-data">No time entries returned by the API.</div>}</article>
+    <article className="surface workflow-list"><div className="section-heading"><div><h2>Time entries</h2><p>Approval status is always read from the API.</p></div></div>{entries.length ? entries.map((entry) => <div className="workflow-row" key={entry._id}><div><strong>{entry.hours.toFixed(2)}h · {entry.category.replace('_', ' ')}</strong><small>{new Date(entry.date).toLocaleDateString()} · {entry.description || 'No description'}</small></div><span className={`status status-${entry.approvalStatus === 'approved' ? 'success' : entry.approvalStatus === 'rejected' ? 'danger' : 'warning'}`}><i />{entry.approvalStatus}</span>{canReview && entry.approvalStatus === 'pending' && <div className="workflow-actions"><button className="icon-button workflow-approve" onClick={() => review(entry, 'approved')}>Approve</button><button className="icon-button workflow-reject" onClick={() => review(entry, 'rejected')}>Reject</button></div>}</div>) : <div className="empty-data">No time entries returned by the API.</div>}</article>
   </section>
 }

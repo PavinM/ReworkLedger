@@ -20,6 +20,9 @@ export interface PayrollAdjustmentDocument extends Document {
   eligibleCorrectiveHours: number;
   configuredHourlyRate: number;
   proposedAmount: number;
+  baseSalary: number;
+  nextMonthSalary: number;
+  adjustmentType: 'credit' | 'debit' | 'none';
   calculationBreakdown: CalculationLine[];
   status: PayrollStatus;
   reviewedBy?: Types.ObjectId;
@@ -52,6 +55,9 @@ const payrollAdjustmentSchema = new Schema<PayrollAdjustmentDocument>(
     eligibleCorrectiveHours: { type: Number, required: true, min: 0 },
     configuredHourlyRate: { type: Number, required: true, min: 0 },
     proposedAmount: { type: Number, required: true, min: 0 },
+    baseSalary: { type: Number, required: true, min: 0, default: 50000 },
+    nextMonthSalary: { type: Number, required: true, min: 0, default: 50000 },
+    adjustmentType: { type: String, enum: ['credit', 'debit', 'none'], required: true, default: 'none' },
     calculationBreakdown: { type: [calculationLineSchema], required: true },
     status: { type: String, enum: payrollStatuses, required: true, default: 'pending_review', index: true },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },

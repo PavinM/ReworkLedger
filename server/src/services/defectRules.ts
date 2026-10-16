@@ -1,7 +1,7 @@
 import type { DefectStatus, TaskStatus } from '../types/domain.js';
 
 export function canReportDefect(taskStatus: TaskStatus): boolean {
-  return taskStatus === 'completed';
+  return taskStatus === 'completed' || taskStatus === 'closed';
 }
 
 export function validateReviewDecision(status: DefectStatus, reviewReason?: string): string | undefined {

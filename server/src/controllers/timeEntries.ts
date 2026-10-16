@@ -3,11 +3,13 @@ import mongoose from 'mongoose';
 import { Defect } from '../models/Defect.js';
 import { Task } from '../models/Task.js';
 import { TimeEntry } from '../models/TimeEntry.js';
+import { PayrollAdjustment } from '../models/PayrollAdjustment.js';
 import { HttpError } from '../middleware/errors.js';
 import { recordAudit } from '../services/audit.js';
 import type { TimeEntryCategory } from '../types/domain.js';
 import { timeEntryQuerySchema } from '../validation/schemas.js';
 import { canReviewTimeEntry, validateTimeEntryEligibility } from '../services/timeEntryRules.js';
+import { calculateProposedAdjustment } from '../services/payrollCalculation.js';
 
 export const listTimeEntries: RequestHandler = async (req, res) => {
   const parsed = timeEntryQuerySchema.safeParse(req.query);
@@ -80,6 +82,33 @@ export const reviewTimeEntry: RequestHandler = async (req, res) => {
   entry.reviewedAt = new Date();
   entry.reviewReason = req.body.reviewReason;
   await entry.save();
+  if (entry.approvalStatus === 'approved' && entry.category === 'corrective_work' && entry.defectId && !entry.payrollAdjustmentId) {
+    const defect = await Defect.findById(entry.defectId).select('cause').lean();
+    if (!defect) throw new HttpError(404, 'Defect not found');
+    const hourlyRate = 1000;
+    const amount = Math.round(entry.hours * hourlyRate * 100) / 100;
+    const isHumanError = defect.cause === 'code_defect';
+    const signedAmount = isHumanError ? -amount : amount;
+    const baseSalary = 50000;
+    const adjustment = await PayrollAdjustment.create({
+      employeeId: entry.employeeId,
+      periodStart: new Date(new Date(entry.date).getFullYear(), new Date(entry.date).getMonth() + 1, 1),
+      periodEnd: new Date(new Date(entry.date).getFullYear(), new Date(entry.date).getMonth() + 2, 0),
+      currency: 'INR',
+      approvedTimeEntryIds: [entry._id],
+      ...calculateProposedAdjustment([{ id: entry._id, taskId: entry.taskId, defectId: entry.defectId, date: entry.date, hours: entry.hours }], hourlyRate),
+      proposedAmount: Math.abs(signedAmount),
+      baseSalary,
+      nextMonthSalary: Math.max(0, baseSalary + signedAmount),
+      adjustmentType: signedAmount > 0 ? 'credit' : 'debit',
+      status: 'approved',
+      reviewedBy: entry.reviewedBy,
+      reviewedAt: entry.reviewedAt,
+      reviewReason: `Automatic ${isHumanError ? 'human-error deduction' : 'natural/technical rework credit'} based on approved corrective time`,
+    });
+    entry.payrollAdjustmentId = adjustment._id;
+    await entry.save();
+  }
   await recordAudit({
     actorId: entry.reviewedBy,
     entityType: 'TimeEntry',

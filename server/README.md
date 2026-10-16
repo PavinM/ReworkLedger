@@ -59,33 +59,21 @@ they do not modify salary records or initiate payments.
 
 Set a long random `JWT_SECRET` in the server environment. JWTs expire after
 eight hours. The API derives actor identities from the verified token and
+
+For the local development workspace, the initial role accounts are:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Employee | `emp@gmail.com` | `123456` |
+| Manager | `man@gmail.com` | `123456` |
+| Administrator | `admin@gmail.com` | `123456` |
+
+Change these credentials before using a shared or production environment. Only
+administrators can create, activate, or deactivate employee and manager
+accounts from the Settings page. The API derives actor identities from the verified token and
 does not trust reviewer/employee IDs supplied by clients.
 
-## Demo seed
-
-The seed is intentionally local-development-only. It refuses to run unless
-`DEMO_MODE=true` and `NODE_ENV` is not `production`. It only inserts or
-updates records identified by the `[DEMO]` marker and never deletes existing
-data.
-
-```bash
-DEMO_MODE=true npm run seed:demo
-```
-
-Run the seed before using the demo credentials. If the frontend is served on
-Vite's alternate development port (`5174`), the API allows both local Vite
-ports during non-production development.
-
-The script uses local-only placeholder identities. Do not use these records as
-real employee identities or salary data. After seeding, the local demo
-accounts are:
-
-```text
-manager.demo@reworkledger.local
-employee.demo@reworkledger.local
-admin.demo@reworkledger.local
-password: DemoReworkLedger!2026
-```
-
-These credentials are only for the explicit local demonstration workflow and
-must never be reused in a deployed environment.
+During non-production development, the API allows local Vite origins on
+alternate ports such as `5174`. Create real organization accounts through the
+authenticated account-management workflow; no demo users or seed data are
+included.

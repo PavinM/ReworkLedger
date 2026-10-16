@@ -11,7 +11,7 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
-    const { employeeId, periodStart, periodEnd, currency, configuredHourlyRate } = req.body;
+    const { employeeId, periodStart, periodEnd, currency, configuredHourlyRate, baseSalary } = req.body;
     const entries = await TimeEntry.find({
       employeeId,
       date: { $gte: periodStart, $lte: periodEnd },
@@ -36,6 +36,17 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
       })),
       configuredHourlyRate,
     );
+    const defectRecords = await Defect.find({ _id: { $in: eligibleEntries.map((entry) => entry.defectId) } }).select('_id cause').session(session).lean();
+    const causeByDefect = new Map(defectRecords.map((defect) => [defect._id.toString(), defect.cause]));
+    const naturalAmount = eligibleEntries.reduce((sum, entry) => {
+      return sum + (causeByDefect.get(entry.defectId!.toString()) !== 'code_defect' ? entry.hours * configuredHourlyRate : 0);
+    }, 0);
+    const humanAmount = eligibleEntries.reduce((sum, entry) => {
+      return sum + (causeByDefect.get(entry.defectId!.toString()) === 'code_defect' ? entry.hours * configuredHourlyRate : 0);
+    }, 0);
+    const signedAmount = Math.round((naturalAmount - humanAmount + Number.EPSILON) * 100) / 100;
+    const adjustmentType = signedAmount > 0 ? 'credit' : signedAmount < 0 ? 'debit' : 'none';
+    const nextMonthSalary = Math.max(0, Math.round((baseSalary + signedAmount + Number.EPSILON) * 100) / 100);
     const adjustment = await PayrollAdjustment.create([{
       employeeId,
       periodStart,
@@ -43,6 +54,10 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
       currency,
       approvedTimeEntryIds: eligibleEntries.map((entry) => entry._id),
       ...calculation,
+      proposedAmount: Math.abs(signedAmount),
+      baseSalary,
+      nextMonthSalary,
+      adjustmentType,
       status: 'pending_review',
     }], { session }).then(([created]) => created);
 

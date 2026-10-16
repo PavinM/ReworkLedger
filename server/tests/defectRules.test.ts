@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { canReportDefect, shouldReopenTask, validateReviewDecision } from '../src/services/defectRules.js';
 
-test('allows defect reporting only after task completion', () => {
+test('allows defect reporting for completed and accepted projects', () => {
   assert.equal(canReportDefect('completed'), true);
+  assert.equal(canReportDefect('closed'), true);
   assert.equal(canReportDefect('in_progress'), false);
   assert.equal(canReportDefect('reopened'), false);
 });

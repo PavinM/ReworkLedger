@@ -5,6 +5,9 @@ export type Project = {
   _id: string
   name: string
   description?: string
+  githubUrl?: string
+  deadline?: string
+  assignedEmployeeId?: string
   status: 'active' | 'completed' | 'archived'
   managerId: string
   createdAt: string
@@ -15,7 +18,15 @@ export type Task = {
   _id: string
   projectId: string
   title: string
+  module: string
   description?: string
+  debugInstructions?: string
+  resolutionDescription?: string
+  resolutionEvidence?: string
+  progressDescription?: string
+  reviewStatus: 'not_submitted' | 'submitted' | 'changes_requested' | 'accepted'
+  reviewReason?: string
+  reviewedBy?: string
   assigneeId: string
   assigneeName: string
   status: 'assigned' | 'in_progress' | 'completed' | 'reopened' | 'under_fix' | 'closed'
@@ -30,8 +41,12 @@ export type Defect = {
   _id: string
   taskId: string
   projectId: string
+  analysisScanId?: string
+  analysisFindingId?: string
   title: string
+  module: string
   description?: string
+  debugInstructions?: string
   severity: 'low' | 'medium' | 'high' | 'critical'
   cause: 'code_defect' | 'requirement_change' | 'external_dependency' | 'other'
   status: 'reported' | 'under_review' | 'approved' | 'exempted' | 'resolved'
@@ -70,6 +85,9 @@ export type PayrollAdjustment = {
   eligibleCorrectiveHours: number
   configuredHourlyRate: number
   proposedAmount: number
+  baseSalary: number
+  nextMonthSalary: number
+  adjustmentType: 'credit' | 'debit' | 'none'
   calculationBreakdown: Array<{
     timeEntryId: string
     taskId: string
@@ -88,6 +106,52 @@ export type PayrollAdjustment = {
 }
 
 export type AuthUser = { id: string; name: string; email: string; role: 'employee' | 'manager' | 'admin' }
+export type DirectoryEmployee = { id: string; name: string; email: string }
+export type ManagedUser = { id: string; name: string; email: string; role: AuthUser['role']; active: boolean; createdAt: string; updatedAt: string }
+export type AnalysisFinding = {
+  _id: string
+  ruleId: string
+  tool: string
+  title: string
+  description: string
+  filePath: string
+  line: number
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  status: 'needs_review' | 'confirmed_bug' | 'false_positive' | 'needs_information' | 'accepted_risk'
+  evidence: string
+  suggestion: string
+  reviewedBy?: string
+  reviewReason?: string
+  defectId?: string
+}
+export type AnalysisScan = {
+  _id: string
+  taskId: string
+  projectId: string
+  uploadedBy: string
+  sourceName: string
+  versionRef?: string
+  expectedBehavior?: string
+  description?: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  errorMessage?: string
+  filesAnalyzed: number
+  totalFindings: number
+  findings: AnalysisFinding[]
+  createdAt: string
+  updatedAt: string
+}
+export type AuditLog = {
+  _id: string
+  actorId?: string
+  entityType: 'TimeEntry' | 'PayrollAdjustment'
+  entityId: string
+  action: string
+  timestamp: string
+  before?: unknown
+  after?: unknown
+  reason?: string
+}
 
 type ApiEnvelope<T> = { data: T }
 
@@ -106,6 +170,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
+  })
+  const payload: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    const message = isErrorPayload(payload) ? payload.error.message : `Request failed (${response.status})`
+    throw new ApiError(response.status, message)
+  }
+  if (!isDataEnvelope<T>(payload)) throw new ApiError(response.status, 'The API returned an invalid response')
+  return payload.data
+}
+
+async function upload<T>(path: string, formData: FormData): Promise<T> {
+  const token = window.localStorage.getItem(TOKEN_KEY)
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
   })
   const payload: unknown = await response.json().catch(() => null)
   if (!response.ok) {
@@ -136,21 +216,68 @@ export const api = {
     window.localStorage.setItem(TOKEN_KEY, data.token)
     return data.user
   },
+  me: () => request<{ user: AuthUser }>('/api/auth/me'),
+  listUsers: () => request<ManagedUser[]>('/api/auth/users'),
+  createStaff: (payload: { name: string; email: string; password: string; role: 'employee' | 'manager' }) => request<{ user: AuthUser }>('/api/auth/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  updateUserStatus: (userId: string, active: boolean) => request<{ user: ManagedUser }>(`/api/auth/users/${userId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ active }),
+  }),
   logout: () => window.localStorage.removeItem(TOKEN_KEY),
   listProjects: (signal?: AbortSignal) => request<Project[]>('/api/projects', { signal }),
+  listEmployees: () => request<DirectoryEmployee[]>('/api/projects/employees'),
+  createProject: (payload: { name: string; description?: string; status?: Project['status']; managerId: string; githubUrl?: string; deadline?: string; assignedEmployeeId?: string }) => request<Project>('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   listTasks: (projectId?: string, signal?: AbortSignal) => request<Task[]>(`/api/tasks${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`, { signal }),
+  createTask: (payload: { projectId: string; title: string; description?: string; assigneeId: string; assigneeName: string; createdBy: string }) => request<Task>('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   updateTaskStatus: (taskId: string, status: Task['status']) => request<Task>(`/api/tasks/${taskId}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   }),
+  updateTaskProgress: (taskId: string, progressDescription: string) => request<Task>(`/api/tasks/${taskId}/progress`, {
+    method: 'PATCH',
+    body: JSON.stringify({ progressDescription }),
+  }),
+  submitTaskForReview: (taskId: string) => request<Task>(`/api/tasks/${taskId}/submit-review`, { method: 'POST' }),
+  reviewTask: (taskId: string, reviewStatus: 'changes_requested' | 'accepted', reviewReason: string) => request<Task>(`/api/tasks/${taskId}/review`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reviewStatus, reviewReason }),
+  }),
   listDefects: (projectId?: string, signal?: AbortSignal) => request<Defect[]>(`/api/defects${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`, { signal }),
-  reportDefect: (payload: Pick<Defect, 'taskId' | 'title' | 'description' | 'severity' | 'cause' | 'reportedBy'>) => request<Defect>('/api/defects', {
+  reportDefect: (payload: Pick<Defect, 'taskId' | 'module' | 'title' | 'description' | 'debugInstructions' | 'severity' | 'cause' | 'reportedBy'>) => request<Defect>('/api/defects', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
   reviewDefect: (defectId: string, payload: Pick<Defect, 'status' | 'reviewedBy' | 'reviewReason'>) => request<Defect>(`/api/defects/${defectId}/review`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  }),
+  submitDefectResolution: (defectId: string, payload: { resolutionDescription: string; resolutionEvidence: string }) => request<Defect>(`/api/defects/${defectId}/resolve`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  acceptDefectResolution: (defectId: string, reviewReason?: string) => request<Defect>(`/api/defects/${defectId}/accept-resolution`, { method: 'PATCH', body: JSON.stringify({ reviewReason }) }),
+  listAnalysisScans: (taskId: string, signal?: AbortSignal) => request<AnalysisScan[]>(`/api/analysis/tasks/${taskId}/scans`, { signal }),
+  uploadAnalysis: (taskId: string, payload: { project: File; versionRef?: string; expectedBehavior?: string; description?: string }) => {
+    const formData = new FormData()
+    formData.append('project', payload.project)
+    if (payload.versionRef) formData.append('versionRef', payload.versionRef)
+    if (payload.expectedBehavior) formData.append('expectedBehavior', payload.expectedBehavior)
+    if (payload.description) formData.append('description', payload.description)
+    return upload<AnalysisScan>(`/api/analysis/tasks/${taskId}/scans`, formData)
+  },
+  reviewAnalysisFinding: (scanId: string, findingId: string, payload: { status: AnalysisFinding['status']; reviewReason: string }) => request<AnalysisScan>(`/api/analysis/scans/${scanId}/findings/${findingId}/review`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }),
+  createDefectFromFinding: (scanId: string, findingId: string, cause: Defect['cause']) => request<Defect>(`/api/analysis/scans/${scanId}/findings/${findingId}/defect`, {
+    method: 'POST',
+    body: JSON.stringify({ cause }),
   }),
   listTimeEntries: (filters?: { employeeId?: string; taskId?: string; defectId?: string; approvalStatus?: TimeEntry['approvalStatus']; startDate?: string; endDate?: string }, signal?: AbortSignal) => {
     const query = new URLSearchParams(Object.entries(filters ?? {}).filter(([, value]) => value !== undefined) as Array<[string, string]>).toString()
@@ -165,7 +292,8 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   listPayroll: (signal?: AbortSignal) => request<PayrollAdjustment[]>('/api/payroll', { signal }),
-  calculatePayroll: (payload: { employeeId: string; periodStart: string; periodEnd: string; currency: string; configuredHourlyRate: number }) => request<PayrollAdjustment>('/api/payroll/calculate', {
+  listAudit: (signal?: AbortSignal) => request<AuditLog[]>('/api/audit-logs', { signal }),
+  calculatePayroll: (payload: { employeeId: string; periodStart: string; periodEnd: string; currency: string; configuredHourlyRate: number; baseSalary: number }) => request<PayrollAdjustment>('/api/payroll/calculate', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),

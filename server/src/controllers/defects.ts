@@ -15,7 +15,7 @@ export const createDefect: RequestHandler = async (req, res) => {
   const task = await Task.findById(req.body.taskId);
   if (!task) throw new HttpError(404, 'Task not found');
   if (!canReportDefect(task.status)) {
-    throw new HttpError(400, 'Defects can only be reported against completed tasks');
+    throw new HttpError(400, 'Defects can only be reported against completed or accepted projects');
   }
   const defect = await Defect.create({ ...req.body, projectId: task.projectId, reportedBy: req.user!.id });
   res.status(201).json({ data: defect });
@@ -50,5 +50,31 @@ export const reviewDefect: RequestHandler = async (req, res) => {
     }
   }
 
+  res.json({ data: defect });
+};
+
+export const submitDefectResolution: RequestHandler = async (req, res) => {
+  const defect = await Defect.findById(req.params.id);
+  if (!defect) throw new HttpError(404, 'Defect not found');
+  const task = await Task.findById(defect.taskId).select('assigneeId');
+  if (!task || task.assigneeId.toString() !== req.user!.id) throw new HttpError(403, 'Only the assigned employee can submit this fix');
+  if (!['reported', 'approved', 'under_review'].includes(defect.status)) throw new HttpError(400, 'This defect is not awaiting an employee fix');
+  defect.resolutionDescription = req.body.resolutionDescription;
+  defect.resolutionEvidence = req.body.resolutionEvidence;
+  defect.resolutionSubmittedAt = new Date();
+  defect.resolutionSubmittedBy = new mongoose.Types.ObjectId(req.user!.id);
+  defect.status = 'under_review';
+  await defect.save();
+  res.json({ data: defect });
+};
+
+export const acceptDefectResolution: RequestHandler = async (req, res) => {
+  const defect = await Defect.findById(req.params.id);
+  if (!defect) throw new HttpError(404, 'Defect not found');
+  if (defect.status !== 'under_review' || !defect.resolutionDescription) throw new HttpError(400, 'Employee resolution must be submitted before acceptance');
+  defect.status = 'resolved';
+  defect.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
+  defect.reviewReason = req.body.reviewReason;
+  await defect.save();
   res.json({ data: defect });
 };

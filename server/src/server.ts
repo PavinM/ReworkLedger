@@ -10,6 +10,7 @@ import { timeEntryRouter } from './routes/timeEntries.js';
 import { payrollRouter } from './routes/payroll.js';
 import { auditRouter } from './routes/audit.js';
 import { authRouter } from './routes/auth.js';
+import { analysisRouter } from './routes/analysis.js';
 
 dotenv.config();
 
@@ -29,7 +30,10 @@ app.use(
             'http://127.0.0.1:5173',
             'http://127.0.0.1:5174',
           ]);
-      if (!origin || allowedOrigins.has(origin)) {
+      const isLocalDevelopmentOrigin = origin
+        ? /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
+        : true;
+      if (!origin || allowedOrigins.has(origin) || (process.env.NODE_ENV !== 'production' && isLocalDevelopmentOrigin)) {
         callback(null, true);
         return;
       }
@@ -48,6 +52,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api/analysis', analysisRouter);
 app.use('/api/projects', projectRouter);
 app.use('/api/tasks', taskRouter);
 app.use('/api/defects', defectRouter);
