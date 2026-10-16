@@ -1,14 +1,15 @@
 import { useState, type FormEvent } from 'react'
 import { Calculator, Check, X } from 'lucide-react'
-import { api, type PayrollAdjustment } from '../lib/api'
+import { api, type AuthUser, type PayrollAdjustment } from '../lib/api'
 
 type Props = {
   adjustments: PayrollAdjustment[]
   onChanged: () => void
   onNotify: (message: string) => void
+  currentUser: AuthUser
 }
 
-export function PayrollReviewPanel({ adjustments, onChanged, onNotify }: Props) {
+export function PayrollReviewPanel({ adjustments, onChanged, onNotify, currentUser }: Props) {
   const [employeeId, setEmployeeId] = useState('')
   const [periodStart, setPeriodStart] = useState('')
   const [periodEnd, setPeriodEnd] = useState('')
@@ -32,11 +33,9 @@ export function PayrollReviewPanel({ adjustments, onChanged, onNotify }: Props) 
 
   const review = async (adjustment: PayrollAdjustment, status: 'approved' | 'rejected') => {
     if (!window.confirm(`Confirm ${status} for ${adjustment.currency} ${adjustment.proposedAmount.toFixed(2)}?`)) return
-    const reviewedBy = window.prompt('Reviewer MongoDB ObjectId')
-    if (!reviewedBy) return
     const reviewReason = status === 'rejected' ? window.prompt('Reason for rejection') || '' : undefined
     try {
-      await api.reviewPayroll(adjustment._id, { status, reviewedBy, reviewReason })
+      await api.reviewPayroll(adjustment._id, { status, reviewedBy: currentUser.id, reviewReason })
       onNotify(`Payroll adjustment ${status}`)
       onChanged()
     } catch (error) {
@@ -45,7 +44,7 @@ export function PayrollReviewPanel({ adjustments, onChanged, onNotify }: Props) 
   }
 
   return <section className="workflow-grid"><article className="surface workflow-form"><div className="workflow-title"><div className="metric-icon metric-amber"><Calculator size={16} /></div><div><h2>Calculate proposal</h2><p>Server calculates only approved, eligible corrective entries.</p></div></div><form onSubmit={calculate}>
-    <label>Employee ID<input required value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} placeholder="MongoDB ObjectId" /></label>
+    <label>Employee ID<input required value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} placeholder="Employee MongoDB ObjectId" /></label>
     <div className="form-row"><label>Period start<input required type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></label><label>Period end<input required type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></label></div>
     <div className="form-row"><label>Currency<input required maxLength={3} value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></label><label>Hourly rate<input required min="0" step="0.01" type="number" value={rate} onChange={(event) => setRate(event.target.value)} /></label></div>
     <button className="export-button" disabled={submitting} type="submit"><Calculator size={14} />{submitting ? 'Calculating…' : 'Create proposal'}</button>

@@ -127,19 +127,22 @@ function App() {
     if (!authUser) return undefined
     const controller = new AbortController()
     const selectedProject = project === 'All projects' ? undefined : project
+    const payrollRequest = authUser.role === 'manager' || authUser.role === 'admin'
+      ? api.listPayroll(controller.signal)
+      : Promise.resolve([] as PayrollAdjustment[])
     Promise.all([
       api.listProjects(controller.signal),
       api.listTasks(selectedProject, controller.signal),
       api.listDefects(selectedProject, controller.signal),
       api.listTimeEntries(undefined, controller.signal),
-      api.listPayroll(controller.signal),
+      payrollRequest,
     ]).then(([nextProjects, nextTasks, nextDefects, nextTimeEntries, nextPayroll]) => {
       setDataError('')
       setProjects(nextProjects)
       setTasks(nextTasks)
       setLiveDefects(nextDefects)
       setTimeEntries(nextTimeEntries)
-      setPayrollAdjustments(nextPayroll)
+      setPayrollAdjustments(nextPayroll ?? [])
     }).catch((error: unknown) => {
       if (error instanceof DOMException && error.name === 'AbortError') return
       setDataError(error instanceof Error ? error.message : 'Unable to load workspace data')
@@ -283,8 +286,8 @@ function App() {
             <article className="surface defects-surface"><SectionHeading title="Recent defects" subtitle="Latest quality events from the defect API." action={<div className="section-actions"><button className="filter-button"><SlidersHorizontal size={13} /> Filter</button><button className="plain-action" onClick={() => navigate('Defects')}>View all <ArrowUpRight size={13} /></button></div>} /><div className="table-scroll"><table><thead><tr><th>Defect</th><th>Project</th><th>Severity</th><th>Task</th><th>Discovered</th><th>Status</th><th /></tr></thead><tbody>{liveDefects.length ? liveDefects.map((defect) => <tr key={defect._id}><td><div className="defect-cell"><strong>{defect._id.slice(-8)}</strong><span>{defect.title}</span></div></td><td className="secondary-cell">{defect.projectId.slice(-8)}</td><td><span className={`badge ${severityClass[defect.severity]}`}><i />{defect.severity}</span></td><td><span className="secondary-cell">{defect.taskId.slice(-8)}</span></td><td className="secondary-cell">{new Date(defect.createdAt).toLocaleDateString()}</td><td><span className={`status ${statusClass[defect.status]}`}><i />{defect.status.replace('_', ' ')}</span></td><td><button className="icon-button" aria-label={`More actions for ${defect._id}`}><MoreHorizontal size={15} /></button></td></tr>) : <tr><td colSpan={7}><EmptyData loading={dataLoading} message="No defects returned by the API." /></td></tr>}</tbody></table></div></article>
             <article className="surface approvals-surface"><SectionHeading title="Corrective time & payroll" subtitle="Live approved entries and proposed adjustments." action={<button className="plain-action" onClick={() => navigate('Payroll review')}>View review <ArrowUpRight size={13} /></button>} /><div className="approval-list">{timeEntries.filter((entry) => entry.category === 'corrective_work').slice(0, 3).map((entry) => <div className="approval-row" key={entry._id}><div className="avatar avatar-xs avatar-lime">{entry.employeeId.slice(-2).toUpperCase()}</div><div className="approval-copy"><strong>{entry.hours.toFixed(2)}h corrective work</strong><small>{entry.approvalStatus} · defect {entry.defectId?.slice(-8) ?? '—'}</small></div><span className={`status ${entry.approvalStatus === 'approved' ? 'status-success' : entry.approvalStatus === 'rejected' ? 'status-danger' : 'status-warning'}`}><i />{entry.approvalStatus}</span></div>)}{!timeEntries.some((entry) => entry.category === 'corrective_work') && <EmptyData loading={dataLoading} message="No corrective time entries returned by the API." />}</div></article>
           </section>
-          {activePage === 'Time tracking' && <TimeTrackingPanel tasks={tasks} defects={liveDefects} entries={timeEntries} onChanged={retryData} onNotify={setToast} />}
-          {activePage === 'Payroll review' && <PayrollReviewPanel adjustments={payrollAdjustments} onChanged={retryData} onNotify={setToast} />}
+          {activePage === 'Time tracking' && <TimeTrackingPanel tasks={tasks} defects={liveDefects} entries={timeEntries} onChanged={retryData} onNotify={setToast} currentUser={authUser} />}
+          {activePage === 'Payroll review' && (authUser.role === 'manager' || authUser.role === 'admin') && <PayrollReviewPanel adjustments={payrollAdjustments} onChanged={retryData} onNotify={setToast} currentUser={authUser} />}
           <footer className="page-footer"><span><ShieldCheck size={13} /> Sample data is illustrative, not live payroll data.</span><span>ReworkLedger · v1.0.0</span><button className="logout-button" onClick={logout}><LogOut size={13} /> Log out</button></footer>
         </div>
       </main>

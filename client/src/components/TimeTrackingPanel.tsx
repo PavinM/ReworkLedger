@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Clock3, Send } from 'lucide-react'
-import { api, type Defect, type Task, type TimeEntry } from '../lib/api'
+import { api, type AuthUser, type Defect, type Task, type TimeEntry } from '../lib/api'
 
 type Props = {
   tasks: Task[]
@@ -8,10 +8,10 @@ type Props = {
   entries: TimeEntry[]
   onChanged: () => void
   onNotify: (message: string) => void
+  currentUser: AuthUser
 }
 
-export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify }: Props) {
-  const [employeeId, setEmployeeId] = useState('')
+export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify, currentUser }: Props) {
   const [taskId, setTaskId] = useState('')
   const [defectId, setDefectId] = useState('')
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
@@ -26,7 +26,7 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
     setSubmitting(true)
     try {
       await api.createTimeEntry({
-        employeeId,
+        employeeId: currentUser.id,
         taskId,
         defectId,
         date,
@@ -47,7 +47,7 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
 
   return <section className="workflow-grid">
     <article className="surface workflow-form"><div className="workflow-title"><div className="metric-icon metric-lime"><Clock3 size={16} /></div><div><h2>Log corrective time</h2><p>Only approved defects can receive corrective work.</p></div></div><form onSubmit={submit}>
-      <label>Employee ID<input required value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} placeholder="MongoDB ObjectId" /></label>
+      <div className="demo-hint"><span>Logging as</span><strong>{currentUser.name}</strong><small>{currentUser.role}</small></div>
       <label>Completed task<select required value={taskId} onChange={(event) => { setTaskId(event.target.value); setDefectId('') }}><option value="">Select a task</option>{completedTasks.map((task) => <option key={task._id} value={task._id}>{task.title}</option>)}</select></label>
       <label>Approved defect<select required value={defectId} onChange={(event) => setDefectId(event.target.value)}><option value="">Select a defect</option>{eligibleDefects.map((defect) => <option key={defect._id} value={defect._id}>{defect.title}</option>)}</select></label>
       <div className="form-row"><label>Date<input required type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>Hours<input required type="number" min="0.01" max="24" step="0.01" value={hours} onChange={(event) => setHours(event.target.value)} placeholder="0.00" /></label></div>

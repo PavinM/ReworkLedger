@@ -14,6 +14,7 @@ export const listTimeEntries: RequestHandler = async (req, res) => {
   if (!parsed.success) throw new HttpError(400, 'Time entry filters are invalid', parsed.error.flatten());
   const query = parsed.data;
   const filter: Record<string, unknown> = {};
+  if (req.user?.role === 'employee') filter.employeeId = req.user.id;
   if (query.employeeId) filter.employeeId = query.employeeId;
   if (query.taskId) filter.taskId = query.taskId;
   if (query.defectId) filter.defectId = query.defectId;
