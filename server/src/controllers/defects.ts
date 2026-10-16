@@ -1,4 +1,5 @@
 import type { RequestHandler } from 'express';
+import mongoose from 'mongoose';
 import { Defect } from '../models/Defect.js';
 import { Task } from '../models/Task.js';
 import { HttpError } from '../middleware/errors.js';
@@ -16,7 +17,7 @@ export const createDefect: RequestHandler = async (req, res) => {
   if (!canReportDefect(task.status)) {
     throw new HttpError(400, 'Defects can only be reported against completed tasks');
   }
-  const defect = await Defect.create({ ...req.body, projectId: task.projectId });
+  const defect = await Defect.create({ ...req.body, projectId: task.projectId, reportedBy: req.user!.id });
   res.status(201).json({ data: defect });
 };
 
@@ -36,7 +37,7 @@ export const reviewDefect: RequestHandler = async (req, res) => {
   }
 
   defect.status = req.body.status;
-  defect.reviewedBy = req.body.reviewedBy;
+  defect.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
   defect.reviewReason = req.body.reviewReason;
   await defect.save();
 

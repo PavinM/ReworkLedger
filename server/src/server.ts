@@ -6,6 +6,10 @@ import { projectRouter } from './routes/projects.js';
 import { taskRouter } from './routes/tasks.js';
 import { defectRouter } from './routes/defects.js';
 import { errorHandler, notFoundHandler } from './middleware/errors.js';
+import { timeEntryRouter } from './routes/timeEntries.js';
+import { payrollRouter } from './routes/payroll.js';
+import { auditRouter } from './routes/audit.js';
+import { authRouter } from './routes/auth.js';
 
 dotenv.config();
 
@@ -14,7 +18,23 @@ const PORT = Number(process.env.PORT) || 5000;
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      const configuredOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
+      const allowedOrigins = process.env.NODE_ENV === 'production'
+        ? new Set([configuredOrigin])
+        : new Set([
+            configuredOrigin,
+            'http://localhost:5173',
+            'http://localhost:5174',
+            'http://127.0.0.1:5173',
+            'http://127.0.0.1:5174',
+          ]);
+      if (!origin || allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error('Origin is not allowed by CORS'));
+    },
   }),
 );
 
@@ -27,9 +47,13 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+app.use('/api/auth', authRouter);
 app.use('/api/projects', projectRouter);
 app.use('/api/tasks', taskRouter);
 app.use('/api/defects', defectRouter);
+app.use('/api/time-entries', timeEntryRouter);
+app.use('/api/payroll', payrollRouter);
+app.use('/api/audit-logs', auditRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 

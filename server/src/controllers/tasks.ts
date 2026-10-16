@@ -14,7 +14,7 @@ export const listTasks: RequestHandler = async (req, res) => {
 export const createTask: RequestHandler = async (req, res) => {
   const project = await Project.exists({ _id: req.body.projectId });
   if (!project) throw new HttpError(404, 'Project not found');
-  const task = await Task.create(req.body);
+  const task = await Task.create({ ...req.body, createdBy: req.user!.id });
   res.status(201).json({ data: task });
 };
 

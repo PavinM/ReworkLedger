@@ -8,7 +8,7 @@ export const listProjects: RequestHandler = async (_req, res) => {
 };
 
 export const createProject: RequestHandler = async (req, res) => {
-  const project = await Project.create(req.body);
+  const project = await Project.create({ ...req.body, managerId: req.user!.id });
   res.status(201).json({ data: project });
 };
 

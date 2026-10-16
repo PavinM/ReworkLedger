@@ -15,4 +15,13 @@ export type DefectCause = (typeof defectCauses)[number];
 export const defectStatuses = ['reported', 'under_review', 'approved', 'exempted', 'resolved'] as const;
 export type DefectStatus = (typeof defectStatuses)[number];
 
+export const timeEntryCategories = ['regular_work', 'corrective_work'] as const;
+export type TimeEntryCategory = (typeof timeEntryCategories)[number];
+
+export const approvalStatuses = ['pending', 'approved', 'rejected'] as const;
+export type ApprovalStatus = (typeof approvalStatuses)[number];
+
+export const payrollStatuses = ['draft', 'pending_review', 'approved', 'rejected', 'voided'] as const;
+export type PayrollStatus = (typeof payrollStatuses)[number];
+
 export type ObjectId = Types.ObjectId;
