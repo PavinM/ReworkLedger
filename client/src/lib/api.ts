@@ -50,6 +50,8 @@ export type Defect = {
   resolutionDescription?: string
   resolutionEvidence?: string
   resolutionHours?: number
+  estimatedResolutionHours?: number
+  estimateModel?: string
   resolutionSubmittedAt?: string
   severity: 'low' | 'medium' | 'high' | 'critical'
   cause: 'code_defect' | 'requirement_change' | 'external_dependency' | 'other'
@@ -82,6 +84,7 @@ export type TimeEntry = {
 export type PayrollAdjustment = {
   _id: string
   employeeId: string
+  employeeName?: string
   periodStart: string
   periodEnd: string
   currency: string
@@ -89,6 +92,8 @@ export type PayrollAdjustment = {
   eligibleCorrectiveHours: number
   configuredHourlyRate: number
   proposedAmount: number
+  overrunHours?: number
+  overrunPenalty?: number
   baseSalary: number
   nextMonthSalary: number
   adjustmentType: 'credit' | 'debit' | 'none'
@@ -260,7 +265,7 @@ export const api = {
     body: JSON.stringify({ reviewStatus, reviewReason }),
   }),
   listDefects: (projectId?: string, signal?: AbortSignal) => request<Defect[]>(`/api/defects${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`, { signal }),
-  reportDefect: (payload: Pick<Defect, 'taskId' | 'module' | 'title' | 'description' | 'debugInstructions' | 'severity' | 'cause' | 'reportedBy'>) => request<Defect>('/api/defects', {
+  reportDefect: (payload: Pick<Defect, 'taskId' | 'module' | 'title' | 'description' | 'debugInstructions' | 'severity' | 'cause' | 'reportedBy' | 'estimatedResolutionHours' | 'estimateModel'>) => request<Defect>('/api/defects', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),

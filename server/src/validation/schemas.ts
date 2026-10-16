@@ -50,6 +50,8 @@ export const createDefectSchema = z.object({
   severity: z.enum(defectSeverities),
   cause: z.enum(defectCauses),
   reportedBy: objectId,
+  estimatedResolutionHours: z.number().finite().min(0.25).max(24).optional(),
+  estimateModel: z.string().trim().min(1).max(200).optional(),
 });
 
 export const reviewDefectSchema = z.object({

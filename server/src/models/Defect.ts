@@ -20,6 +20,8 @@ export interface DefectDocument extends Document {
   resolutionDescription?: string;
   resolutionEvidence?: string;
   resolutionHours?: number;
+  estimatedResolutionHours?: number;
+  estimateModel?: string;
   resolutionSubmittedAt?: Date;
   resolutionSubmittedBy?: Types.ObjectId;
   severity: DefectSeverity;
@@ -45,6 +47,8 @@ const defectSchema = new Schema<DefectDocument>(
     resolutionDescription: { type: String, trim: true, maxlength: 4000 },
     resolutionEvidence: { type: String, trim: true, maxlength: 4000 },
     resolutionHours: { type: Number, min: 0.01, max: 24 },
+    estimatedResolutionHours: { type: Number, min: 0.25, max: 24 },
+    estimateModel: { type: String, trim: true, maxlength: 200 },
     resolutionSubmittedAt: { type: Date },
     resolutionSubmittedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     severity: { type: String, enum: defectSeverities, required: true },

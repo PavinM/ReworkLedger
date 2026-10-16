@@ -1,7 +1,139 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, type AuditLog, type AuthUser, type Defect, type DirectoryEmployee, type Project, type Task } from '../lib/api'
+import { Sparkles, X } from 'lucide-react'
+import { api, type AuditLog, type AuthUser, type Defect, type DirectoryEmployee, type PayrollAdjustment, type Project, type Task } from '../lib/api'
 
 type Notice = (message: string) => void
+type DefectAssessment = {
+  cause: Defect['cause']
+  severity: Defect['severity']
+  confidence: number
+  estimatedHours: number
+  rationale: string
+  model: string
+}
+type DefectTimer = { elapsedMs: number; startedAt?: number }
+
+function readDefectTimers(userId: string): Record<string, DefectTimer> {
+  const key = `reworkledger.defect-timers:${userId}`
+  const stored = window.localStorage.getItem(key)
+  if (!stored) return {}
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stored)
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    window.localStorage.removeItem(key)
+    return {}
+  }
+  if (!isRecord(parsed)) return {}
+
+  return Object.fromEntries(Object.entries(parsed).flatMap(([defectId, timer]) => {
+    if (!isRecord(timer)
+      || typeof timer.elapsedMs !== 'number'
+      || !Number.isFinite(timer.elapsedMs)
+      || timer.elapsedMs < 0
+      || (timer.startedAt !== undefined && (typeof timer.startedAt !== 'number' || !Number.isFinite(timer.startedAt)))) return []
+    return [[defectId, {
+      elapsedMs: timer.elapsedMs,
+      startedAt: typeof timer.startedAt === 'number' ? timer.startedAt : undefined,
+    }]]
+  }))
+}
+
+function formatTimerDuration(milliseconds: number): string {
+  const totalSeconds = Math.floor(milliseconds / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+const ollamaUrl = 'http://localhost:11434'
+const preferredOllamaModel = 'qwen2.5-coder:3b'
+
+async function assessDefectLocally(input: { module: string; title: string; description: string; instructions: string }): Promise<DefectAssessment> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 90000)
+  try {
+    const tagsResponse = await fetch(`${ollamaUrl}/api/tags`, { signal: controller.signal })
+    if (!tagsResponse.ok) throw new Error(`Ollama model list request failed (${tagsResponse.status})`)
+    const tagsPayload: unknown = await tagsResponse.json()
+    if (!isRecord(tagsPayload) || !Array.isArray(tagsPayload.models)) throw new Error('Ollama returned an invalid model list')
+    const models = tagsPayload.models.filter((model): model is { name: string } => isRecord(model) && typeof model.name === 'string')
+    const selectedModel = models.find((model) => model.name === preferredOllamaModel) ?? models[0]
+    if (!selectedModel) throw new Error('No local Ollama model is installed')
+
+    const response = await fetch(`${ollamaUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: selectedModel.name,
+        stream: false,
+        format: 'json',
+        messages: [
+          {
+            role: 'system',
+            content: 'Triage the supplied software defect. Return only a JSON object with cause (one of code_defect, requirement_change, external_dependency, other), severity (one of low, medium, high, critical), confidence (integer 0-100), estimatedHours (number 0.25-24), and rationale (one concise sentence). Be conservative; label uncertainty as other/low confidence. Do not provide code or claim facts not in the report.',
+          },
+          { role: 'user', content: JSON.stringify(input) },
+        ],
+      }),
+    })
+    if (!response.ok) throw new Error(`Ollama assessment failed (${response.status})`)
+    const payload: unknown = await response.json()
+    if (!isRecord(payload) || !isRecord(payload.message) || typeof payload.message.content !== 'string') {
+      throw new Error('Ollama returned an invalid assessment response')
+    }
+    const result: unknown = JSON.parse(payload.message.content)
+    if (!isRecord(result)
+      || !isCause(result.cause)
+      || !isSeverity(result.severity)
+      || typeof result.confidence !== 'number'
+      || !Number.isFinite(result.confidence)
+      || result.confidence < 0
+      || result.confidence > 100
+      || typeof result.estimatedHours !== 'number'
+      || !Number.isFinite(result.estimatedHours)
+      || result.estimatedHours < 0.25
+      || result.estimatedHours > 24
+      || typeof result.rationale !== 'string'
+      || !result.rationale.trim()) {
+      throw new Error('Ollama assessment did not match the expected fields')
+    }
+    return {
+      cause: result.cause,
+      severity: result.severity,
+      confidence: result.confidence,
+      estimatedHours: result.estimatedHours,
+      rationale: result.rationale.trim(),
+      model: selectedModel.name,
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Local Ollama assessment timed out. Check that Ollama is running and retry.', { cause: error })
+    }
+    if (error instanceof TypeError) {
+      throw new Error('Cannot reach local Ollama. Start Ollama and check its browser access settings.', { cause: error })
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isCause(value: unknown): value is Defect['cause'] {
+  return value === 'code_defect' || value === 'requirement_change' || value === 'external_dependency' || value === 'other'
+}
+
+function isSeverity(value: unknown): value is Defect['severity'] {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'critical'
+}
 
 export function ProjectsTasksPanel({ projects, tasks, defects, currentUser, onChanged, onNotify, focus = 'projects' }: {
   projects: Project[]
@@ -82,25 +214,103 @@ export function ProjectsTasksPanel({ projects, tasks, defects, currentUser, onCh
   </section>
 }
 
-export function DefectsPanel({ tasks, defects, currentUser, onChanged, onNotify }: { tasks: Task[]; defects: Defect[]; currentUser: AuthUser; onChanged: () => void; onNotify: Notice }) {
+export function DefectsPanel({ tasks, defects, projects, adjustments, currentUser, onChanged, onNotify }: {
+  tasks: Task[]
+  defects: Defect[]
+  projects: Project[]
+  adjustments: PayrollAdjustment[]
+  currentUser: AuthUser
+  onChanged: () => void
+  onNotify: Notice
+}) {
   const [taskId, setTaskId] = useState('')
   const [module, setModule] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [debugInstructions, setDebugInstructions] = useState('')
-  const [resolution, setResolution] = useState<Record<string, { description: string; evidence: string; hours: string }>>({})
+  const [resolution, setResolution] = useState<Record<string, { description: string; evidence: string }>>({})
+  const [timers, setTimers] = useState<Record<string, DefectTimer>>(() => readDefectTimers(currentUser.id))
+  const [timerClock, setTimerClock] = useState(Date.now())
   const [verifiedHours, setVerifiedHours] = useState<Record<string, string>>({})
+  const [assessments, setAssessments] = useState<Record<string, DefectAssessment>>({})
+  const [assessmentErrors, setAssessmentErrors] = useState<Record<string, string>>({})
+  const [assessing, setAssessing] = useState<string | null>(null)
+  const [selectedDefectId, setSelectedDefectId] = useState<string | null>(null)
   const [severity, setSeverity] = useState<Defect['severity']>('medium')
   const [cause, setCause] = useState<Defect['cause']>('code_defect')
   const canReview = currentUser.role === 'manager' || currentUser.role === 'admin'
+  const clearNewAssessment = () => setAssessments((current) => {
+    const next = { ...current }
+    delete next.new
+    return next
+  })
+  useEffect(() => {
+    const storageKey = `reworkledger.defect-timers:${currentUser.id}`
+    if (Object.keys(timers).length) window.localStorage.setItem(storageKey, JSON.stringify(timers))
+    else window.localStorage.removeItem(storageKey)
+  }, [currentUser.id, timers])
+
+  useEffect(() => {
+    if (!Object.values(timers).some((timer) => timer.startedAt !== undefined)) return
+    const interval = window.setInterval(() => setTimerClock(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [timers])
+
+  const elapsedTimerMs = (defectId: string) => {
+    const timer = timers[defectId]
+    return timer ? timer.elapsedMs + (timer.startedAt === undefined ? 0 : Math.max(0, timerClock - timer.startedAt)) : 0
+  }
+  const trackedTimerHours = (defectId: string) => Math.round((elapsedTimerMs(defectId) / 3600000) * 100) / 100
+  const estimatedOverrunHours = (defect: Defect) => defect.estimatedResolutionHours === undefined
+    ? 0
+    : Math.max(0, Math.round((trackedTimerHours(defect._id) - defect.estimatedResolutionHours) * 100) / 100)
+  const updateResolution = (defectId: string, field: 'description' | 'evidence', value: string) => {
+    setResolution((current) => ({
+      ...current,
+      [defectId]: {
+        description: current[defectId]?.description ?? '',
+        evidence: current[defectId]?.evidence ?? '',
+        [field]: value,
+      },
+    }))
+  }
+  const toggleDefectTimer = (defectId: string) => {
+    const activeTimer = Object.entries(timers).find(([, timer]) => timer.startedAt !== undefined)
+    if (activeTimer && activeTimer[0] !== defectId) {
+      onNotify('Stop the running defect timer before starting another one')
+      return
+    }
+    const timer = timers[defectId] ?? { elapsedMs: 0 }
+    if (timer.startedAt !== undefined) {
+      const elapsedMs = timer.elapsedMs + Math.max(0, Date.now() - timer.startedAt)
+      setTimers((current) => ({ ...current, [defectId]: { elapsedMs } }))
+      setTimerClock(Date.now())
+    } else {
+      setTimers((current) => ({ ...current, [defectId]: { ...timer, startedAt: Date.now() } }))
+      setTimerClock(Date.now())
+    }
+  }
   const report = async (event: FormEvent) => {
     event.preventDefault()
     try {
-      await api.reportDefect({ taskId, module, title, description, debugInstructions, severity, cause, reportedBy: currentUser.id })
+      const estimate = assessments.new
+      await api.reportDefect({
+        taskId,
+        module,
+        title,
+        description,
+        debugInstructions,
+        severity,
+        cause,
+        reportedBy: currentUser.id,
+        estimatedResolutionHours: estimate?.estimatedHours,
+        estimateModel: estimate?.model,
+      })
       setModule('')
       setTitle('')
       setDescription('')
       setDebugInstructions('')
+      clearNewAssessment()
       onNotify('Debug assignment sent to employee')
       onChanged()
     } catch (error) {
@@ -109,9 +319,17 @@ export function DefectsPanel({ tasks, defects, currentUser, onChanged, onNotify 
   }
   const submitResolution = async (defect: Defect) => {
     const value = resolution[defect._id]
-    if (!value?.description.trim() || !value.evidence.trim() || !value.hours || Number(value.hours) <= 0) { onNotify('Add the fix summary, verification evidence, and hours spent'); return }
+    if (timers[defect._id]?.startedAt !== undefined) { onNotify('Stop the timer before submitting the fix'); return }
+    const hours = trackedTimerHours(defect._id)
+    if (!value?.description.trim() || !value.evidence.trim() || hours <= 0) { onNotify('Add the fix summary, verification evidence, and track time with the timer'); return }
+    if (hours > 24) { onNotify('Tracked time cannot exceed 24 hours for one defect fix'); return }
     try {
-      await api.submitDefectResolution(defect._id, { resolutionDescription: value.description, resolutionEvidence: value.evidence, resolutionHours: Number(value.hours) })
+      await api.submitDefectResolution(defect._id, { resolutionDescription: value.description, resolutionEvidence: value.evidence, resolutionHours: hours })
+      setTimers((current) => {
+        const next = { ...current }
+        delete next[defect._id]
+        return next
+      })
       onNotify('Fix submitted to manager for acceptance')
       onChanged()
     } catch (error) {
@@ -121,7 +339,11 @@ export function DefectsPanel({ tasks, defects, currentUser, onChanged, onNotify 
   const acceptResolution = async (defect: Defect) => {
     try {
       await api.acceptDefectResolution(defect._id)
-      onNotify('Employee fix accepted; defect resolved')
+      onNotify(defect.estimatedResolutionHours !== undefined
+        && defect.resolutionHours !== undefined
+        && defect.resolutionHours > defect.estimatedResolutionHours
+        ? 'Fix accepted; overrun salary deduction is pending payroll approval'
+        : 'Employee fix accepted; defect resolved')
       onChanged()
     } catch (error) {
       onNotify(error instanceof Error ? error.message : 'Unable to accept fix')
@@ -140,20 +362,46 @@ export function DefectsPanel({ tasks, defects, currentUser, onChanged, onNotify 
       onNotify(error instanceof Error ? error.message : 'Unable to record salary adjustment')
     }
   }
+  const runAssessment = async (key: string, input: { module: string; title: string; description: string; instructions: string }) => {
+    if (!input.description.trim()) {
+      setAssessmentErrors((current) => ({ ...current, [key]: 'Add a failure description before running an assessment.' }))
+      return
+    }
+    setAssessing(key)
+    setAssessmentErrors((current) => ({ ...current, [key]: '' }))
+    try {
+      const result = await assessDefectLocally(input)
+      setAssessments((current) => ({ ...current, [key]: result }))
+    } catch (error) {
+      setAssessmentErrors((current) => ({ ...current, [key]: error instanceof Error ? error.message : 'Unable to assess this defect locally' }))
+    } finally {
+      setAssessing(null)
+    }
+  }
+  const applyAssessmentToForm = (assessment: DefectAssessment) => {
+    setCause(assessment.cause)
+    setSeverity(assessment.severity)
+  }
+  const selectedDefect = defects.find((defect) => defect._id === selectedDefectId) ?? null
   return <section className={`workflow-grid ${canReview ? '' : 'workflow-grid-single'}`}>
     {canReview && <article className="surface workflow-form">
       <>
         <div className="section-heading"><div><h2>Assign project debug work</h2><p>Select the failed module and send debugging instructions to the assigned employee.</p></div></div>
         <form onSubmit={report}>
           <label>Completed project<select required value={taskId} onChange={(event) => setTaskId(event.target.value)}><option value="">Select project</option>{tasks.filter((task) => task.status === 'completed' || task.status === 'closed').map((task) => <option key={task._id} value={task._id}>{task.title.replace(/ delivery$/, '')}</option>)}</select></label>
-          <label>Failed module<input required value={module} onChange={(event) => setModule(event.target.value)} /></label>
-          <label>Failure title<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-          <label>Failure description<textarea required value={description} onChange={(event) => setDescription(event.target.value)} /></label>
-          <label>Debug instructions for employee<textarea required value={debugInstructions} onChange={(event) => setDebugInstructions(event.target.value)} /></label>
+          <label>Failed module<input required value={module} onChange={(event) => { setModule(event.target.value); clearNewAssessment() }} /></label>
+          <label>Failure title<input required value={title} onChange={(event) => { setTitle(event.target.value); clearNewAssessment() }} /></label>
+          <label>Failure description<textarea required value={description} onChange={(event) => { setDescription(event.target.value); clearNewAssessment() }} /></label>
+          <label>Debug instructions for employee<textarea required value={debugInstructions} onChange={(event) => { setDebugInstructions(event.target.value); clearNewAssessment() }} /></label>
           <div className="form-row">
             <label>Severity<select value={severity} onChange={(event) => setSeverity(event.target.value as Defect['severity'])}>{['low', 'medium', 'high', 'critical'].map((value) => <option key={value}>{value}</option>)}</select></label>
             <label>Cause<select value={cause} onChange={(event) => setCause(event.target.value as Defect['cause'])}>{['code_defect', 'requirement_change', 'external_dependency', 'other'].map((value) => <option key={value}>{value}</option>)}</select></label>
           </div>
+          <button className="local-ai-button" type="button" disabled={assessing === 'new'} onClick={() => void runAssessment('new', { module, title, description, instructions: debugInstructions })}>
+            <Sparkles size={14} />{assessing === 'new' ? 'Assessing with local Ollama…' : 'Assess with local Ollama'}
+          </button>
+          {assessmentErrors.new && <p className="local-ai-error" role="alert">{assessmentErrors.new}</p>}
+          {assessments.new && <AssessmentCard assessment={assessments.new} onApply={() => applyAssessmentToForm(assessments.new)} />}
           <button className="export-button" type="submit">Send debug assignment</button>
         </form>
       </>
@@ -164,17 +412,23 @@ export function DefectsPanel({ tasks, defects, currentUser, onChanged, onNotify 
       {defects.map((defect) => <article className="defect-card" key={defect._id}>
         <div className="defect-card-heading">
           <div><strong>{defect.module || 'Project module'}: {defect.title}</strong><small>{defect.severity} · {defect.cause.replaceAll('_', ' ')}</small></div>
-          <span className={`status ${defect.status === 'resolved' ? 'status-success' : defect.status === 'exempted' ? 'status-danger' : defect.status === 'under_review' ? 'status-warning' : 'status-danger'}`}><i />{defect.status.replaceAll('_', ' ')}</span>
+          <div className="defect-heading-actions"><span className={`status ${defect.status === 'resolved' ? 'status-success' : defect.status === 'exempted' ? 'status-danger' : defect.status === 'under_review' ? 'status-warning' : 'status-danger'}`}><i />{defect.status.replaceAll('_', ' ')}</span><button className="defect-details-button" type="button" onClick={() => setSelectedDefectId(defect._id)}>Details</button></div>
         </div>
         <p>{defect.description}</p>
         <div className="defect-debug-instructions"><strong>Debug instructions</strong><p>{defect.debugInstructions || 'No additional instructions.'}</p></div>
           {!canReview && defect.status !== 'resolved' && defect.status !== 'exempted' && <>
             {defect.resolutionDescription && <div className="defect-resolution"><strong>Fix submitted</strong><p>{defect.resolutionDescription}</p><small>Evidence</small><p>{defect.resolutionEvidence}</p><span className="status status-warning"><i />Waiting for manager acceptance</span></div>}
             {!defect.resolutionDescription && <div className="delivery-review">
-              <label>Fix summary<textarea value={resolution[defect._id]?.description ?? ''} onChange={(event) => setResolution((current) => ({ ...current, [defect._id]: { description: event.target.value, evidence: current[defect._id]?.evidence ?? '', hours: current[defect._id]?.hours ?? '' } }))} placeholder="Describe the code change or fix you made" /></label>
-              <label>Verification evidence<textarea value={resolution[defect._id]?.evidence ?? ''} onChange={(event) => setResolution((current) => ({ ...current, [defect._id]: { description: current[defect._id]?.description ?? '', evidence: event.target.value, hours: current[defect._id]?.hours ?? '' } }))} placeholder="Tests, commit reference, logs, or screenshots" /></label>
-              <label>Time spent (hours)<input type="number" min="0.01" max="24" step="0.25" value={resolution[defect._id]?.hours ?? ''} onChange={(event) => setResolution((current) => ({ ...current, [defect._id]: { description: current[defect._id]?.description ?? '', evidence: current[defect._id]?.evidence ?? '', hours: event.target.value } }))} placeholder="For example, 2.5" /></label>
-              <button className="export-button" onClick={() => void submitResolution(defect)}>Submit fix for manager acceptance</button>
+              <label>Fix summary<textarea value={resolution[defect._id]?.description ?? ''} onChange={(event) => updateResolution(defect._id, 'description', event.target.value)} placeholder="Describe the code change or fix you made" /></label>
+              <label>Verification evidence<textarea value={resolution[defect._id]?.evidence ?? ''} onChange={(event) => updateResolution(defect._id, 'evidence', event.target.value)} placeholder="Tests, commit reference, logs, or screenshots" /></label>
+              <div className="defect-timer" aria-live="polite">
+                <div><small>TIME SPENT</small><strong>{formatTimerDuration(elapsedTimerMs(defect._id))}</strong><span>{trackedTimerHours(defect._id) > 0 ? `${trackedTimerHours(defect._id).toFixed(2)} hours tracked` : 'Timer is saved on this device'}</span></div>
+                <button className="icon-button" type="button" onClick={() => toggleDefectTimer(defect._id)}>{timers[defect._id]?.startedAt !== undefined ? 'Pause timer' : 'Start timer'}</button>
+              </div>
+              {defect.estimatedResolutionHours !== undefined
+                ? <p className="defect-timer-note">AI estimate: {defect.estimatedResolutionHours.toFixed(2)}h · {estimatedOverrunHours(defect).toFixed(2)}h over estimate · proposed deduction at ₹1,000/h: ₹{(estimatedOverrunHours(defect) * 1000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} (manager approval required)</p>
+                : <p className="defect-timer-note">No AI estimate was saved for this assignment; an overrun deduction will not be calculated.</p>}
+              <button className="export-button" disabled={timers[defect._id]?.startedAt !== undefined} onClick={() => void submitResolution(defect)}>Submit fix for manager acceptance</button>
             </div>}
           </>}
           {canReview && defect.resolutionDescription && <div className="defect-resolution"><strong>Employee fix to review</strong><p>{defect.resolutionDescription}</p><small>Verification evidence</small><p>{defect.resolutionEvidence}</p>{defect.resolutionHours && <small>Employee time reported: {defect.resolutionHours}h</small>}</div>}
@@ -185,7 +439,106 @@ export function DefectsPanel({ tasks, defects, currentUser, onChanged, onNotify 
       </div>
       {!defects.length && <div className="empty-data">No debug assignments for this project.</div>}
     </article>
+    {selectedDefect && <DefectDetailsModal
+      defect={selectedDefect}
+      task={tasks.find((task) => task._id === selectedDefect.taskId)}
+      project={projects.find((project) => project._id === tasks.find((task) => task._id === selectedDefect.taskId)?.projectId)}
+      adjustments={adjustments}
+      assessment={assessments[selectedDefect._id]}
+      assessmentError={assessmentErrors[selectedDefect._id]}
+      assessing={assessing === selectedDefect._id}
+      onClose={() => setSelectedDefectId(null)}
+      onAnalyze={() => void runAssessment(selectedDefect._id, {
+        module: selectedDefect.module,
+        title: selectedDefect.title,
+        description: selectedDefect.description ?? '',
+        instructions: selectedDefect.debugInstructions ?? '',
+      })}
+    />}
   </section>
+}
+
+function AssessmentCard({ assessment, onApply }: { assessment: DefectAssessment; onApply?: () => void }) {
+  return <section className="local-ai-result" aria-label="Local AI suggestion">
+    <div className="local-ai-heading"><div><Sparkles size={14} /><strong>Local AI assessment</strong></div><span>Suggestion · manager review required</span></div>
+    <div className="local-ai-metrics">
+      <div><small>Suggested cause</small><strong>{assessment.cause.replaceAll('_', ' ')}</strong></div>
+      <div><small>Suggested severity</small><strong>{assessment.severity}</strong></div>
+      <div><small>Confidence</small><strong>{Math.round(assessment.confidence)}%</strong></div>
+      <div><small>Repair estimate</small><strong>{assessment.estimatedHours.toFixed(1)}h</strong></div>
+    </div>
+    <p>{assessment.rationale}</p>
+    <small className="local-ai-model">Generated locally by {assessment.model}; cause and severity remain manager-controlled.</small>
+    {onApply && <button type="button" className="local-ai-apply" onClick={onApply}>Use cause and severity suggestions</button>}
+  </section>
+}
+
+function DefectDetailsModal({ defect, task, project, adjustments, assessment, assessmentError, assessing, onClose, onAnalyze }: {
+  defect: Defect
+  task?: Task
+  project?: Project
+  adjustments: PayrollAdjustment[]
+  assessment?: DefectAssessment
+  assessmentError?: string
+  assessing: boolean
+  onClose: () => void
+  onAnalyze: () => void
+}) {
+  const defectAdjustments = adjustments.flatMap((adjustment) => {
+    const entries = adjustment.calculationBreakdown.filter((entry) => entry.defectId === defect._id)
+    if (!entries.length) return []
+    const amount = entries.reduce((total, entry) => total + Math.abs(entry.amount), 0)
+    return [{ adjustment, entries, amount }]
+  })
+  const salaryImpact = defectAdjustments.reduce((total, item) => total + (item.adjustment.adjustmentType === 'debit' ? -item.amount : item.adjustment.adjustmentType === 'credit' ? item.amount : 0), 0)
+  const trackedHours = defect.resolutionHours
+  const expectedHours = defect.estimatedResolutionHours ?? assessment?.estimatedHours
+  const progress = trackedHours && expectedHours ? Math.min(100, Math.round(trackedHours / expectedHours * 100)) : null
+  const timeline = [
+    { label: 'Debug assignment created', date: defect.createdAt },
+    ...(defect.resolutionSubmittedAt ? [{ label: 'Employee fix submitted', date: defect.resolutionSubmittedAt }] : []),
+    ...(defect.status === 'resolved' ? [{ label: 'Defect resolved', date: defect.updatedAt }] : []),
+  ]
+  return <div className="defect-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="defect-details-modal" role="dialog" aria-modal="true" aria-labelledby="defect-detail-title">
+      <header className="defect-details-header">
+        <div><div className="defect-detail-kicker">{defect._id.slice(-8)} · {project?.name ?? 'Project'} · {task?.assigneeName ?? 'Assigned employee'}</div><h2 id="defect-detail-title">{defect.title}</h2><small>{defect.module || 'Project module'} · {defect.severity} · {defect.status.replaceAll('_', ' ')}</small></div>
+        <button className="icon-button" type="button" aria-label="Close defect details" onClick={onClose}><X size={17} /></button>
+      </header>
+      <div className="defect-details-body">
+        <div className="defect-details-main">
+          <section className="defect-detail-task"><small>ORIGINAL PROJECT DELIVERY</small><strong>{task?.title ?? 'Delivery details unavailable'}</strong><span>{task ? `${task.status.replaceAll('_', ' ')} · assigned to ${task.assigneeName}` : 'No matching delivery record was returned.'}</span>{task?.originalCompletedAt && <span>Completed {new Date(task.originalCompletedAt).toLocaleDateString()}</span>}</section>
+          <section className="defect-detail-section"><small>DESCRIPTION</small><p>{defect.description || 'No failure description was provided.'}</p></section>
+          <section className="defect-detail-section"><small>DEBUG INSTRUCTIONS</small><p>{defect.debugInstructions || 'No additional instructions.'}</p></section>
+          <section className="defect-detail-section"><small>LIFECYCLE</small><ol className="defect-lifecycle">{timeline.map((item) => <li key={item.label}><strong>{item.label}</strong><span>{new Date(item.date).toLocaleString()}</span></li>)}{!defect.resolutionSubmittedAt && defect.status !== 'resolved' && <li className="defect-lifecycle-pending"><strong>Waiting for employee fix</strong><span>{defect.status.replaceAll('_', ' ')}</span></li>}</ol></section>
+          {defect.resolutionDescription && <section className="defect-detail-section defect-detail-fix"><small>EMPLOYEE FIX SUMMARY</small><p>{defect.resolutionDescription}</p>{defect.resolutionEvidence && <><small>VERIFICATION EVIDENCE</small><p>{defect.resolutionEvidence}</p></>}</section>}
+        </div>
+        <aside className="defect-details-aside">
+          <section className="defect-detail-ai">
+            <div className="defect-detail-ai-title"><Sparkles size={14} /><strong>Local AI assessment</strong></div>
+            <p>{defect.estimatedResolutionHours !== undefined
+              ? `Saved estimate: ${defect.estimatedResolutionHours.toFixed(2)}h${defect.estimateModel ? ` · ${defect.estimateModel}` : ''}. Any deduction for tracked time above this estimate remains pending manager approval.`
+              : 'Optional suggestions from Ollama on this device; these do not change the defect or replace manager review.'}</p>
+            <button className="local-ai-button" type="button" disabled={assessing} onClick={onAnalyze}><Sparkles size={13} />{assessing ? 'Assessing locally…' : assessment ? 'Run assessment again' : 'Assess with local Ollama'}</button>
+            {assessmentError && <p className="local-ai-error" role="alert">{assessmentError}</p>}
+            {assessment && <AssessmentCard assessment={assessment} />}
+          </section>
+          <section className="defect-detail-stat-grid">
+            <div><small>TRACKED TIME</small><strong>{trackedHours ? `${trackedHours.toFixed(2)}h` : '—'}</strong><span>Employee-reported resolution time</span></div>
+            <div><small>REPAIR PROGRESS</small><strong>{progress === null ? '—' : `${progress}%`}</strong><div className="defect-progress"><i style={{ width: `${progress ?? 0}%` }} /></div><span>{expectedHours && trackedHours ? `${trackedHours.toFixed(1)}h tracked vs ${expectedHours.toFixed(1)}h estimate` : expectedHours ? `Estimate ${expectedHours.toFixed(1)}h` : 'No saved estimate to compare'}</span></div>
+          </section>
+          <section className="defect-detail-cost">
+            <div><span>Company rework cost</span><strong>{defectAdjustments.length ? `${defectAdjustments[0].adjustment.currency} ${defectAdjustments.reduce((sum, item) => sum + item.amount, 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : 'Not recorded'}</strong></div>
+            <div><span>Related salary adjustment</span><strong>{defectAdjustments.length ? `${defectAdjustments[0].adjustment.currency} ${Math.abs(salaryImpact).toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${salaryImpact < 0 ? 'deduction' : salaryImpact > 0 ? 'credit' : ''}` : 'Not recorded'}</strong></div>
+            {defectAdjustments.map(({ adjustment }) => <small key={adjustment._id}>{adjustment.status.replaceAll('_', ' ')} · {adjustment.adjustmentType} · payroll period {new Date(adjustment.periodStart).toLocaleDateString()}–{new Date(adjustment.periodEnd).toLocaleDateString()}</small>)}
+            {defectAdjustments.some(({ adjustment }) => (adjustment.overrunPenalty ?? 0) > 0) && <small>Overrun deduction: ₹{defectAdjustments.reduce((sum, item) => sum + (item.adjustment.overrunPenalty ?? 0), 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })} for {defectAdjustments.reduce((sum, item) => sum + (item.adjustment.overrunHours ?? 0), 0).toFixed(2)} excess hours · manager approval required</small>}
+            <small>Salary changes remain subject to the existing manager approval workflow.</small>
+          </section>
+          {defect.reviewReason && <section className="defect-detail-cost"><small>MANAGER REVIEW NOTE</small><p>{defect.reviewReason}</p></section>}
+        </aside>
+      </div>
+    </section>
+  </div>
 }
 
 export function AuditPanel({ logs }: { logs: AuditLog[] }) {

@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
-  Clock3,
   Command,
   Download,
   FileClock,
@@ -18,12 +17,9 @@ import {
   LogOut,
   Menu,
   MoreHorizontal,
-  Moon,
   Search,
-  Settings,
   ShieldCheck,
   SlidersHorizontal,
-  Sun,
   Timer,
   X,
   Zap,
@@ -45,7 +41,6 @@ const primaryNav: NavItem[] = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Projects', icon: FolderKanban },
   { label: 'Defects', icon: AlertCircle },
-  { label: 'Time tracking', icon: Timer },
 ]
 
 const intelligenceNav: NavItem[] = [
@@ -53,7 +48,6 @@ const intelligenceNav: NavItem[] = [
   { label: 'Salary adjustments', icon: FileClock },
   { label: 'Quality intelligence', icon: Gauge },
   { label: 'Audit trail', icon: ShieldCheck },
-  { label: 'Settings', icon: Settings },
 ]
 
 function navigationForRole(role: LoginRole): NavItem[] {
@@ -101,7 +95,6 @@ function App() {
   const [toast, setToast] = useState('')
   const [project, setProject] = useState('All projects')
   const [period, setPeriod] = useState('May 04 – May 17, 2026')
-  const [theme, setTheme] = useState<'dark' | 'light'>('light')
   const [projects, setProjects] = useState<Project[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [liveDefects, setLiveDefects] = useState<ApiDefect[]>([])
@@ -235,22 +228,19 @@ function App() {
   )
 
   return (
-    <div className={`app-shell theme-${theme}`}>
+    <div className="app-shell theme-light">
       <main className="main-content">
         <header className="topbar">
           <div className="topbar-left">
             <button className="mobile-menu icon-button" onClick={() => setMobileNavOpen(!mobileNavOpen)} aria-label="Toggle navigation"><Menu size={19} /></button>
             <div className="brand-lockup"><div className="brand-mark"><span>R</span></div><span className="brand-name">Rework<span>Ledger</span></span></div>
-            <button className="workspace-chip" aria-label="Select workspace"><span className="workspace-icon">AC</span><span>Acme Corporation</span><ChevronDown size={13} /></button>
             <nav className={`top-nav ${mobileNavOpen ? 'top-nav-open' : ''}`} aria-label="Application navigation">
               {visibleNavigation.map((item) => <NavButton key={item.label} item={item} active={activePage === item.label} expanded onClick={() => navigate(item.label)} />)}
             </nav>
             <div className="breadcrumb"><span>Workspace</span><ChevronRight size={13} /><strong>{activePage}</strong></div>
           </div>
           <div className="topbar-actions">
-            <button className="global-search" onClick={() => setCommandOpen(true)}><Search size={15} /><span>Search workspace</span><kbd><Command size={10} /> K</kbd></button>
-            <button className="period-pill" onClick={() => setToast('Payroll period: May 04 – May 17, 2026')}><Clock3 size={14} /><span>May 04 – May 17</span></button>
-            <button className="theme-toggle icon-button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
+            <button className="global-search" onClick={() => setCommandOpen(true)} aria-label="Search workspace" title="Search workspace"><Search size={18} /></button>
             <div className="popover-wrap"><button className="icon-button notification-button" onClick={() => setShowNotifications(!showNotifications)} aria-expanded={showNotifications} aria-label="Notifications"><Bell size={17} /><span className="notification-dot" /></button>{showNotifications && <Popover title="Notifications"><p>4 payroll reviews are waiting for your attention.</p><button onClick={() => setShowNotifications(false)}>Mark as read</button></Popover>}</div>
             <div className="popover-wrap"><button className="top-profile" onClick={() => setShowProfile(!showProfile)} aria-expanded={showProfile}><span className="avatar avatar-lime">{profileInitials}</span><span className="profile-name">{authUser.name}</span><ChevronDown size={13} /></button>{showProfile && <Popover title={authUser.name}><p>{profileRole} · {authUser.email}</p><button onClick={() => { setActivePage('Settings'); setShowProfile(false) }}>Open account settings</button></Popover>}</div>
             <button className="logout-button topbar-logout" onClick={logout}><LogOut size={13} /><span>Log out</span></button>
@@ -289,13 +279,13 @@ function App() {
           {activePage === 'Time tracking' && <TimeTrackingPanel tasks={tasks} defects={liveDefects} entries={timeEntries} onChanged={retryData} onNotify={setToast} currentUser={authUser} />}
           {activePage === 'Projects' && <ProjectsTasksPanel projects={projects} tasks={tasks} defects={liveDefects} currentUser={authUser} onChanged={retryData} onNotify={setToast} />}
           {activePage === 'Code analysis' && <AnalysisPanel tasks={tasks} currentUser={authUser} onNotify={setToast} />}
-          {activePage === 'Defects' && <DefectsPanel tasks={tasks} defects={liveDefects} currentUser={authUser} onChanged={retryData} onNotify={setToast} />}
+          {activePage === 'Defects' && <DefectsPanel tasks={tasks} defects={liveDefects} projects={projects} adjustments={payrollAdjustments} currentUser={authUser} onChanged={retryData} onNotify={setToast} />}
           {activePage === 'Audit trail' && <AuditPanel logs={auditLogs} />}
           {activePage === 'Quality intelligence' && <QualityPanel defects={liveDefects} entries={timeEntries} />}
           {activePage === 'Settings' && <SettingsPanel currentUser={authUser} onLogout={logout} onProfileUpdated={setAuthUser} showToast={setToast} />}
-          {activePage === 'Salary adjustments' && (authUser.role === 'manager' || authUser.role === 'admin') && <PayrollReviewPanel adjustments={payrollAdjustments} />}
+          {activePage === 'Salary adjustments' && (authUser.role === 'manager' || authUser.role === 'admin') && <PayrollReviewPanel adjustments={payrollAdjustments} currentUser={authUser} onChanged={retryData} onNotify={setToast} />}
           {activePage === 'Salary adjustments' && authUser.role === 'employee' && <EmployeePayrollView adjustments={payrollAdjustments} />}
-          <footer className="page-footer"><span><ShieldCheck size={13} /> Evidence-based workflow with manager review.</span><span>ReworkLedger · v1.0.0</span><button className="logout-button" onClick={logout}><LogOut size={13} /> Log out</button></footer>
+          <footer className="page-footer"><span><ShieldCheck size={13} /> Evidence-based workflow with manager review.</span><span>ReworkLedger · v1.0.0</span></footer>
         </div>
       </main>
 
@@ -334,7 +324,7 @@ function QualityPanel({ defects, entries }: { defects: ApiDefect[]; entries: Tim
   const correctiveHours = entries.filter((entry) => entry.category === 'corrective_work').reduce((sum, entry) => sum + entry.hours, 0)
   const approvedHours = entries.filter((entry) => entry.category === 'corrective_work' && entry.approvalStatus === 'approved').reduce((sum, entry) => sum + entry.hours, 0)
   const causes = defects.reduce<Record<string, number>>((result, defect) => ({ ...result, [defect.cause]: (result[defect.cause] ?? 0) + 1 }), {})
-  return <section className="workflow-grid"><article className="surface workflow-list"><div className="section-heading"><div><h2>Quality intelligence</h2><p>Live, database-backed quality and rework indicators.</p></div></div><div className="overview-strip"><OverviewMetric label="Total defects" value={String(defects.length)} note="Current workspace" icon={AlertCircle} accent="danger" /><OverviewMetric label="Corrective hours" value={`${correctiveHours.toFixed(2)}h`} note="All submitted entries" icon={Timer} accent="amber" /><OverviewMetric label="Approved hours" value={`${approvedHours.toFixed(2)}h`} note="Eligible for proposals" icon={Check} accent="lime" /></div><h3>Defects by cause</h3>{Object.entries(causes).map(([cause, count]) => <div className="workflow-row" key={cause}><strong>{cause.replaceAll('_', ' ')}</strong><span className="status status-warning"><i />{count}</span></div>)}</article></section>
+  return <section className="workflow-grid workflow-grid-single"><article className="surface workflow-list"><div className="section-heading"><div><h2>Quality intelligence</h2><p>Live, database-backed quality and rework indicators.</p></div></div><div className="overview-strip"><OverviewMetric label="Total defects" value={String(defects.length)} note="Current workspace" icon={AlertCircle} accent="danger" /><OverviewMetric label="Corrective hours" value={`${correctiveHours.toFixed(2)}h`} note="All submitted entries" icon={Timer} accent="amber" /><OverviewMetric label="Approved hours" value={`${approvedHours.toFixed(2)}h`} note="Eligible for proposals" icon={Check} accent="lime" /></div><h3>Defects by cause</h3>{Object.entries(causes).map(([cause, count]) => <div className="workflow-row" key={cause}><strong>{cause.replaceAll('_', ' ')}</strong><span className="status status-warning"><i />{count}</span></div>)}</article></section>
 }
 
 function SettingsPanel({ currentUser, onLogout, onProfileUpdated, showToast }: { currentUser: AuthUser; onLogout: () => void; onProfileUpdated: (user: AuthUser) => void; showToast: (message: string) => void }) {

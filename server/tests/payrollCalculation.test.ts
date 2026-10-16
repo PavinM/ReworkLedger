@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateProposedAdjustment, roundMoney } from '../src/services/payrollCalculation.js';
+import { calculateDefectSalaryAdjustment, calculateNextMonthSalary, calculateProposedAdjustment, roundMoney } from '../src/services/payrollCalculation.js';
 import { canReviewTimeEntry, validateTimeEntryEligibility } from '../src/services/timeEntryRules.js';
-import { calculatePayrollSchema, createTimeEntrySchema } from '../src/validation/schemas.js';
+import { calculatePayrollSchema, createDefectSchema, createTimeEntrySchema } from '../src/validation/schemas.js';
 
 const ids = {
   first: '507f1f77bcf86cd799439011',
@@ -67,4 +67,47 @@ test('calculation engine only processes the entries it receives', () => {
   const result = calculateProposedAdjustment([approvedEntry], 25);
   assert.deepEqual(result.calculationBreakdown.map((line) => line.timeEntryId.toString()), [ids.first]);
   assert.equal(result.proposedAmount, 50);
+});
+
+test('does not propose overrun deductions below or at the AI estimate', () => {
+  assert.deepEqual(calculateDefectSalaryAdjustment(1.5, 2, 1000), {
+    overrunHours: 0,
+    overrunPenalty: 0,
+    requiresApproval: false,
+  });
+  assert.deepEqual(calculateDefectSalaryAdjustment(2, 2, 1000), {
+    overrunHours: 0,
+    overrunPenalty: 0,
+    requiresApproval: false,
+  });
+});
+
+test('calculates a pending deduction of 1000 INR per excess hour', () => {
+  assert.deepEqual(calculateDefectSalaryAdjustment(3.5, 2, 1000), {
+    overrunHours: 1.5,
+    overrunPenalty: 1500,
+    requiresApproval: true,
+  });
+});
+
+test('applies a pending overrun deduction only after it is approved', () => {
+  const existing = [{ adjustmentType: 'credit' as const, proposedAmount: 2000 }];
+  const penalty = { adjustmentType: 'debit' as const, proposedAmount: 1500 };
+  assert.equal(calculateNextMonthSalary(50000, existing), 52000);
+  assert.equal(calculateNextMonthSalary(50000, [...existing, penalty]), 50500);
+});
+
+test('validates the optional Ollama estimate on defect assignments', () => {
+  const assignment = {
+    taskId: ids.first,
+    module: 'Payments',
+    title: 'Incorrect total',
+    description: 'Totals are inconsistent.',
+    debugInstructions: 'Trace the calculation.',
+    severity: 'medium',
+    cause: 'code_defect',
+    reportedBy: ids.second,
+  };
+  assert.equal(createDefectSchema.safeParse({ ...assignment, estimatedResolutionHours: 2, estimateModel: 'qwen2.5-coder:3b' }).success, true);
+  assert.equal(createDefectSchema.safeParse({ ...assignment, estimatedResolutionHours: 25 }).success, false);
 });

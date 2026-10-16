@@ -22,6 +22,31 @@ export function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+export function calculateDefectSalaryAdjustment(
+  hours: number,
+  expectedHours: number | undefined,
+  hourlyRate: number,
+) {
+  const overrunHours = expectedHours === undefined ? 0 : Math.max(0, hours - expectedHours);
+  const overrunPenalty = roundMoney(overrunHours * hourlyRate);
+
+  return {
+    overrunHours: roundMoney(overrunHours),
+    overrunPenalty,
+    requiresApproval: overrunPenalty > 0,
+  };
+}
+
+export function calculateNextMonthSalary(
+  baseSalary: number,
+  adjustments: Array<{ adjustmentType: 'credit' | 'debit' | 'none'; proposedAmount: number }>,
+): number {
+  const signedAdjustments = adjustments.reduce((total, adjustment) => (
+    total + (adjustment.adjustmentType === 'credit' ? adjustment.proposedAmount : adjustment.adjustmentType === 'debit' ? -adjustment.proposedAmount : 0)
+  ), 0);
+  return Math.max(0, roundMoney(baseSalary + signedAdjustments));
+}
+
 export function calculateProposedAdjustment(entries: PayrollInput[], hourlyRate: number): {
   eligibleCorrectiveHours: number;
   proposedAmount: number;

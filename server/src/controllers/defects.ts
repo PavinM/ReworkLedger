@@ -6,7 +6,7 @@ import { HttpError } from '../middleware/errors.js';
 import { canReportDefect, shouldReopenTask } from '../services/defectRules.js';
 import { TimeEntry } from '../models/TimeEntry.js';
 import { PayrollAdjustment } from '../models/PayrollAdjustment.js';
-import { calculateProposedAdjustment } from '../services/payrollCalculation.js';
+import { calculateDefectSalaryAdjustment, calculateNextMonthSalary, calculateProposedAdjustment } from '../services/payrollCalculation.js';
 import { recordAudit } from '../services/audit.js';
 
 export const listDefects: RequestHandler = async (req, res) => {
@@ -110,6 +110,7 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
     reviewReason: req.body.reviewReason || 'Corrective time verified with accepted defect fix',
   }], { session }).then(([created]) => created);
   const hourlyRate = 1000;
+  const salaryCalculation = calculateDefectSalaryAdjustment(defect.resolutionHours, defect.estimatedResolutionHours, hourlyRate);
   const amount = Math.round(defect.resolutionHours * hourlyRate * 100) / 100;
   const signedAmount = defect.cause === 'code_defect' ? -amount : amount;
   const baseSalary = 50000;
@@ -120,8 +121,11 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
     periodStart,
     status: 'approved',
   }).session(session).select('adjustmentType proposedAmount').lean();
-  const cumulative = previousAdjustments.reduce((total, adjustment) => total + (adjustment.adjustmentType === 'credit' ? adjustment.proposedAmount : adjustment.adjustmentType === 'debit' ? -adjustment.proposedAmount : 0), 0) + signedAmount;
-  const nextMonthSalary = Math.max(0, Math.round((baseSalary + cumulative + Number.EPSILON) * 100) / 100);
+  const adjustmentType = signedAmount > 0 ? 'credit' : 'debit';
+  const nextMonthSalary = calculateNextMonthSalary(baseSalary, [
+    ...previousAdjustments,
+    { adjustmentType, proposedAmount: amount },
+  ]);
   const adjustment = await PayrollAdjustment.create([{
     employeeId: task.assigneeId,
     periodStart,
@@ -136,10 +140,10 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
       date: reviewedAt,
       hours: defect.resolutionHours,
     }], hourlyRate),
-    proposedAmount: Math.abs(signedAmount),
+    proposedAmount: amount,
     baseSalary,
     nextMonthSalary,
-    adjustmentType: signedAmount > 0 ? 'credit' : 'debit',
+    adjustmentType,
     status: 'approved',
     reviewedBy: req.user!.id,
     reviewedAt,
@@ -147,6 +151,40 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
   }], { session }).then(([created]) => created);
   timeEntry.payrollAdjustmentId = adjustment._id;
   await timeEntry.save({ session });
+  let overrunAdjustment: typeof adjustment | undefined;
+  if (salaryCalculation.requiresApproval) {
+    const projectedSalary = calculateNextMonthSalary(baseSalary, [
+      ...previousAdjustments,
+      { adjustmentType, proposedAmount: amount },
+      { adjustmentType: 'debit', proposedAmount: salaryCalculation.overrunPenalty },
+    ]);
+    overrunAdjustment = await PayrollAdjustment.create([{
+      employeeId: task.assigneeId,
+      periodStart,
+      periodEnd,
+      currency: 'INR',
+      approvedTimeEntryIds: [timeEntry._id],
+      eligibleCorrectiveHours: salaryCalculation.overrunHours,
+      configuredHourlyRate: hourlyRate,
+      calculationBreakdown: [{
+        timeEntryId: timeEntry._id,
+        taskId: defect.taskId,
+        defectId: defect._id,
+        date: reviewedAt,
+        hours: salaryCalculation.overrunHours,
+        hourlyRate,
+        amount: salaryCalculation.overrunPenalty,
+      }],
+      proposedAmount: salaryCalculation.overrunPenalty,
+      overrunHours: salaryCalculation.overrunHours,
+      overrunPenalty: salaryCalculation.overrunPenalty,
+      baseSalary,
+      nextMonthSalary: projectedSalary,
+      adjustmentType: 'debit',
+      status: 'pending_review',
+      reviewReason: `Proposed ₹${salaryCalculation.overrunPenalty.toFixed(2)} deduction for ${salaryCalculation.overrunHours.toFixed(2)} hours over the ${defect.estimatedResolutionHours} hour AI estimate; pending payroll approval`,
+    }], { session }).then(([created]) => created);
+  }
   defect.status = 'resolved';
   defect.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
   defect.reviewReason = req.body.reviewReason;
@@ -156,9 +194,35 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
     entityType: 'PayrollAdjustment',
     entityId: adjustment._id,
     action: `automatic_salary_${adjustment.adjustmentType}`,
-    after: { employeeId: task.assigneeId, defectId: defect._id, hours: defect.resolutionHours, amount: adjustment.proposedAmount, nextMonthSalary },
+    after: {
+      employeeId: task.assigneeId,
+      defectId: defect._id,
+      hours: defect.resolutionHours,
+      amount: adjustment.proposedAmount,
+      nextMonthSalary,
+      status: adjustment.status,
+    },
     reason: adjustment.reviewReason,
   }, session);
+  if (overrunAdjustment) {
+    await recordAudit({
+      actorId: new mongoose.Types.ObjectId(req.user!.id),
+      entityType: 'PayrollAdjustment',
+      entityId: overrunAdjustment._id,
+      action: 'salary_adjustment_pending_review',
+      after: {
+        employeeId: task.assigneeId,
+        defectId: defect._id,
+        expectedHours: defect.estimatedResolutionHours,
+        actualHours: defect.resolutionHours,
+        overrunHours: salaryCalculation.overrunHours,
+        overrunPenalty: salaryCalculation.overrunPenalty,
+        nextMonthSalary: overrunAdjustment.nextMonthSalary,
+        status: overrunAdjustment.status,
+      },
+      reason: overrunAdjustment.reviewReason,
+    }, session);
+  }
   await session.commitTransaction();
   res.json({ data: defect });
   } catch (error) {

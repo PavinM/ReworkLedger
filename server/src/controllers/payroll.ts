@@ -3,9 +3,10 @@ import type { RequestHandler } from 'express';
 import { Defect } from '../models/Defect.js';
 import { PayrollAdjustment } from '../models/PayrollAdjustment.js';
 import { TimeEntry } from '../models/TimeEntry.js';
+import { User } from '../models/User.js';
 import { HttpError } from '../middleware/errors.js';
 import { recordAudit } from '../services/audit.js';
-import { calculateProposedAdjustment } from '../services/payrollCalculation.js';
+import { calculateNextMonthSalary, calculateProposedAdjustment } from '../services/payrollCalculation.js';
 
 export const calculatePayroll: RequestHandler = async (req, res) => {
   const session = await mongoose.startSession();
@@ -93,7 +94,15 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
 export const listPayroll: RequestHandler = async (req, res) => {
   const filter = req.user?.role === 'employee' ? { employeeId: req.user.id } : {};
   const adjustments = await PayrollAdjustment.find(filter).sort({ createdAt: -1 }).lean();
-  res.json({ data: adjustments });
+  const employeeIds = [...new Set(adjustments.map((adjustment) => adjustment.employeeId.toString()))];
+  const employees = await User.find({ _id: { $in: employeeIds } }).select('_id name').lean();
+  const employeeNames = new Map(employees.map((employee) => [employee._id.toString(), employee.name]));
+  res.json({
+    data: adjustments.map((adjustment) => ({
+      ...adjustment,
+      employeeName: employeeNames.get(adjustment.employeeId.toString()) ?? 'Employee',
+    })),
+  });
 };
 
 export const getPayroll: RequestHandler = async (req, res) => {
@@ -120,6 +129,18 @@ export const reviewPayroll: RequestHandler = async (req, res) => {
     adjustment.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
     adjustment.reviewedAt = new Date();
     adjustment.reviewReason = req.body.reviewReason;
+    const approvedAdjustments = await PayrollAdjustment.find({
+      employeeId: adjustment.employeeId,
+      periodStart: adjustment.periodStart,
+      status: 'approved',
+      _id: { $ne: adjustment._id },
+    }).session(session).select('adjustmentType proposedAmount').lean();
+    adjustment.nextMonthSalary = calculateNextMonthSalary(
+      adjustment.baseSalary,
+      adjustment.status === 'approved'
+        ? [...approvedAdjustments, adjustment]
+        : approvedAdjustments,
+    );
     await adjustment.save({ session });
     await recordAudit({
       actorId: adjustment.reviewedBy,
@@ -127,7 +148,7 @@ export const reviewPayroll: RequestHandler = async (req, res) => {
       entityId: adjustment._id,
       action: `payroll_adjustment_${adjustment.status}`,
       before,
-      after: { status: adjustment.status, reviewedAt: adjustment.reviewedAt },
+      after: { status: adjustment.status, reviewedAt: adjustment.reviewedAt, nextMonthSalary: adjustment.nextMonthSalary },
       reason: adjustment.reviewReason,
     }, session);
     await session.commitTransaction();
