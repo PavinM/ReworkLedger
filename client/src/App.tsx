@@ -15,6 +15,7 @@ import {
   Gauge,
   Keyboard,
   LayoutDashboard,
+  LogOut,
   Menu,
   MoreHorizontal,
   Moon,
@@ -89,7 +90,7 @@ function App() {
   const [toast, setToast] = useState('')
   const [project, setProject] = useState('All projects')
   const [period, setPeriod] = useState('May 04 – May 17, 2026')
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const [theme, setTheme] = useState<'dark' | 'light'>('light')
   const [projects, setProjects] = useState<Project[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [liveDefects, setLiveDefects] = useState<ApiDefect[]>([])
@@ -164,6 +165,17 @@ function App() {
   }
 
   const retryData = () => setRefreshToken((value) => value + 1)
+  const logout = () => {
+    api.logout()
+    setAuthUser(null)
+    setShowProfile(false)
+    setToast('')
+    setProjects([])
+    setTasks([])
+    setLiveDefects([])
+    setTimeEntries([])
+    setPayrollAdjustments([])
+  }
   const submitLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setLoggingIn(true)
@@ -273,7 +285,7 @@ function App() {
           </section>
           {activePage === 'Time tracking' && <TimeTrackingPanel tasks={tasks} defects={liveDefects} entries={timeEntries} onChanged={retryData} onNotify={setToast} />}
           {activePage === 'Payroll review' && <PayrollReviewPanel adjustments={payrollAdjustments} onChanged={retryData} onNotify={setToast} />}
-          <footer className="page-footer"><span><ShieldCheck size={13} /> Sample data is illustrative, not live payroll data.</span><span>ReworkLedger · v1.0.0</span></footer>
+          <footer className="page-footer"><span><ShieldCheck size={13} /> Sample data is illustrative, not live payroll data.</span><span>ReworkLedger · v1.0.0</span><button className="logout-button" onClick={logout}><LogOut size={13} /> Log out</button></footer>
         </div>
       </main>
 
