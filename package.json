@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "framer-motion": "^14.3.0",
+    "lucide-react": "^1.57.0",
+    "recharts": "^3.10.1",
+    "tailwindcss": "^4.3.3"
+  }
+}
