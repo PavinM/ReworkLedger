@@ -127,9 +127,7 @@ function App() {
     if (!authUser) return undefined
     const controller = new AbortController()
     const selectedProject = project === 'All projects' ? undefined : project
-    const payrollRequest = authUser.role === 'manager' || authUser.role === 'admin'
-      ? api.listPayroll(controller.signal)
-      : Promise.resolve([] as PayrollAdjustment[])
+    const payrollRequest = api.listPayroll(controller.signal)
     Promise.all([
       api.listProjects(controller.signal),
       api.listTasks(selectedProject, controller.signal),
@@ -288,6 +286,7 @@ function App() {
           </section>
           {activePage === 'Time tracking' && <TimeTrackingPanel tasks={tasks} defects={liveDefects} entries={timeEntries} onChanged={retryData} onNotify={setToast} currentUser={authUser} />}
           {activePage === 'Payroll review' && (authUser.role === 'manager' || authUser.role === 'admin') && <PayrollReviewPanel adjustments={payrollAdjustments} onChanged={retryData} onNotify={setToast} currentUser={authUser} />}
+          {activePage === 'Payroll review' && authUser.role === 'employee' && <EmployeePayrollView adjustments={payrollAdjustments} />}
           <footer className="page-footer"><span><ShieldCheck size={13} /> Sample data is illustrative, not live payroll data.</span><span>ReworkLedger · v1.0.0</span><button className="logout-button" onClick={logout}><LogOut size={13} /> Log out</button></footer>
         </div>
       </main>
@@ -317,6 +316,10 @@ function Popover({ title, children }: { title: string; children: ReactNode }) {
 
 function EmptyData({ loading, message }: { loading: boolean; message: string }) {
   return <div className="empty-data" aria-live="polite">{loading ? 'Loading live data…' : message}</div>
+}
+
+function EmployeePayrollView({ adjustments }: { adjustments: PayrollAdjustment[] }) {
+  return <section className="workflow-grid"><article className="surface workflow-list employee-payroll-view"><div className="section-heading"><div><h2>My proposed payroll adjustments</h2><p>Read-only payroll proposals for your authenticated profile.</p></div></div>{adjustments.length ? adjustments.map((adjustment) => <div className="workflow-row" key={adjustment._id}><div><strong>{adjustment.currency} {adjustment.proposedAmount.toFixed(2)} · {adjustment.eligibleCorrectiveHours.toFixed(2)}h corrective work</strong><small>{new Date(adjustment.periodStart).toLocaleDateString()} – {new Date(adjustment.periodEnd).toLocaleDateString()}</small></div><span className={`status ${adjustment.status === 'approved' ? 'status-success' : adjustment.status === 'rejected' ? 'status-danger' : 'status-warning'}`}><i />{adjustment.status.replace('_', ' ')}</span></div>) : <EmptyData loading={false} message="No payroll proposals are available for your profile." />}</article></section>
 }
 
 function CommandPalette({ onClose, onNavigate }: { onClose: () => void; onNavigate: (label: string) => void }) {

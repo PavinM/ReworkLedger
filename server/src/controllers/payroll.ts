@@ -75,8 +75,9 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
   }
 };
 
-export const listPayroll: RequestHandler = async (_req, res) => {
-  const adjustments = await PayrollAdjustment.find().sort({ createdAt: -1 }).lean();
+export const listPayroll: RequestHandler = async (req, res) => {
+  const filter = req.user?.role === 'employee' ? { employeeId: req.user.id } : {};
+  const adjustments = await PayrollAdjustment.find(filter).sort({ createdAt: -1 }).lean();
   res.json({ data: adjustments });
 };
 
@@ -84,6 +85,9 @@ export const getPayroll: RequestHandler = async (req, res) => {
   if (!req.params.id) throw new HttpError(400, 'Payroll adjustment id is required');
   const adjustment = await PayrollAdjustment.findById(req.params.id).lean();
   if (!adjustment) throw new HttpError(404, 'Payroll adjustment not found');
+  if (req.user?.role === 'employee' && adjustment.employeeId.toString() !== req.user.id) {
+    throw new HttpError(403, 'You do not have access to this payroll adjustment');
+  }
   res.json({ data: adjustment });
 };
 

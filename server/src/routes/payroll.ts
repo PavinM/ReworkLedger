@@ -7,9 +7,8 @@ import { calculatePayroll, getPayroll, listPayroll, reviewPayroll, voidPayroll }
 
 export const payrollRouter = Router();
 payrollRouter.use(authenticate);
-payrollRouter.use(requireRoles('manager', 'admin'));
-payrollRouter.post('/calculate', validateBody(calculatePayrollSchema), asyncHandler(calculatePayroll));
 payrollRouter.get('/', asyncHandler(listPayroll));
 payrollRouter.get('/:id', asyncHandler(getPayroll));
-payrollRouter.patch('/:id/review', validateBody(reviewPayrollSchema), asyncHandler(reviewPayroll));
-payrollRouter.patch('/:id/void', validateBody(voidPayrollSchema), asyncHandler(voidPayroll));
+payrollRouter.post('/calculate', requireRoles('manager', 'admin'), validateBody(calculatePayrollSchema), asyncHandler(calculatePayroll));
+payrollRouter.patch('/:id/review', requireRoles('manager', 'admin'), validateBody(reviewPayrollSchema), asyncHandler(reviewPayroll));
+payrollRouter.patch('/:id/void', requireRoles('manager', 'admin'), validateBody(voidPayrollSchema), asyncHandler(voidPayroll));
