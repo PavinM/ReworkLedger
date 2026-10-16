@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import type { RequestHandler } from 'express';
 import { Defect } from '../models/Defect.js';
 import { PayrollAdjustment } from '../models/PayrollAdjustment.js';
+import { Task } from '../models/Task.js';
 import { TimeEntry } from '../models/TimeEntry.js';
 import { User } from '../models/User.js';
 import { HttpError } from '../middleware/errors.js';
@@ -13,6 +14,11 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
   try {
     session.startTransaction();
     const { employeeId, periodStart, periodEnd, currency, configuredHourlyRate, baseSalary } = req.body;
+    const employee = await User.findById(employeeId).session(session).select('hourlyRate baseSalary payrollCurrency').lean();
+    if (!employee) throw new HttpError(404, 'Payroll employee not found');
+    const effectiveHourlyRate = employee.hourlyRate ?? configuredHourlyRate;
+    const effectiveBaseSalary = employee.baseSalary ?? baseSalary;
+    const effectiveCurrency = employee.payrollCurrency ?? currency;
     const entries = await TimeEntry.find({
       employeeId,
       date: { $gte: periodStart, $lte: periodEnd },
@@ -35,28 +41,28 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
         date: entry.date,
         hours: entry.hours,
       })),
-      configuredHourlyRate,
+      effectiveHourlyRate,
     );
     const defectRecords = await Defect.find({ _id: { $in: eligibleEntries.map((entry) => entry.defectId) } }).select('_id cause').session(session).lean();
     const causeByDefect = new Map(defectRecords.map((defect) => [defect._id.toString(), defect.cause]));
     const naturalAmount = eligibleEntries.reduce((sum, entry) => {
-      return sum + (causeByDefect.get(entry.defectId!.toString()) !== 'code_defect' ? entry.hours * configuredHourlyRate : 0);
+      return sum + (causeByDefect.get(entry.defectId!.toString()) !== 'code_defect' ? entry.hours * effectiveHourlyRate : 0);
     }, 0);
     const humanAmount = eligibleEntries.reduce((sum, entry) => {
-      return sum + (causeByDefect.get(entry.defectId!.toString()) === 'code_defect' ? entry.hours * configuredHourlyRate : 0);
+      return sum + (causeByDefect.get(entry.defectId!.toString()) === 'code_defect' ? entry.hours * effectiveHourlyRate : 0);
     }, 0);
     const signedAmount = Math.round((naturalAmount - humanAmount + Number.EPSILON) * 100) / 100;
     const adjustmentType = signedAmount > 0 ? 'credit' : signedAmount < 0 ? 'debit' : 'none';
-    const nextMonthSalary = Math.max(0, Math.round((baseSalary + signedAmount + Number.EPSILON) * 100) / 100);
+    const nextMonthSalary = Math.max(0, Math.round((effectiveBaseSalary + signedAmount + Number.EPSILON) * 100) / 100);
     const adjustment = await PayrollAdjustment.create([{
       employeeId,
       periodStart,
       periodEnd,
-      currency,
+      currency: effectiveCurrency,
       approvedTimeEntryIds: eligibleEntries.map((entry) => entry._id),
       ...calculation,
       proposedAmount: Math.abs(signedAmount),
-      baseSalary,
+      baseSalary: effectiveBaseSalary,
       nextMonthSalary,
       adjustmentType,
       status: 'pending_review',
@@ -76,6 +82,7 @@ export const calculatePayroll: RequestHandler = async (req, res) => {
     }
 
     await recordAudit({
+      actorId: new mongoose.Types.ObjectId(req.user!.id),
       entityType: 'PayrollAdjustment',
       entityId: adjustment._id,
       action: 'payroll_calculation_created',
@@ -95,12 +102,27 @@ export const listPayroll: RequestHandler = async (req, res) => {
   const filter = req.user?.role === 'employee' ? { employeeId: req.user.id } : {};
   const adjustments = await PayrollAdjustment.find(filter).sort({ createdAt: -1 }).lean();
   const employeeIds = [...new Set(adjustments.map((adjustment) => adjustment.employeeId.toString()))];
+  const taskIds = [...new Set(adjustments.flatMap((adjustment) => adjustment.calculationBreakdown.map((line) => line.taskId.toString())))];
+  const defectIds = [...new Set(adjustments.flatMap((adjustment) => adjustment.calculationBreakdown.map((line) => line.defectId.toString())))];
   const employees = await User.find({ _id: { $in: employeeIds } }).select('_id name').lean();
+  const tasks = await Task.find({ _id: { $in: taskIds } }).select('_id title').lean();
+  const defects = await Defect.find({ _id: { $in: defectIds } }).select('_id title module cause').lean();
   const employeeNames = new Map(employees.map((employee) => [employee._id.toString(), employee.name]));
+  const taskDetails = new Map(tasks.map((task) => [task._id.toString(), { taskTitle: task.title }]));
+  const defectDetails = new Map(defects.map((defect) => [defect._id.toString(), {
+    defectTitle: defect.title,
+    module: defect.module,
+    cause: defect.cause,
+  }]));
   res.json({
     data: adjustments.map((adjustment) => ({
       ...adjustment,
       employeeName: employeeNames.get(adjustment.employeeId.toString()) ?? 'Employee',
+      calculationBreakdown: adjustment.calculationBreakdown.map((line) => ({
+        ...line,
+        ...taskDetails.get(line.taskId.toString()),
+        ...defectDetails.get(line.defectId.toString()),
+      })),
     })),
   });
 };

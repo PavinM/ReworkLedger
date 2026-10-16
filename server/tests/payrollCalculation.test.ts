@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateDefectSalaryAdjustment, calculateNextMonthSalary, calculateProposedAdjustment, roundMoney } from '../src/services/payrollCalculation.js';
 import { canReviewTimeEntry, validateTimeEntryEligibility } from '../src/services/timeEntryRules.js';
-import { calculatePayrollSchema, createDefectSchema, createTimeEntrySchema } from '../src/validation/schemas.js';
+import { calculatePayrollSchema, createDefectSchema, createTimeEntrySchema, reviewPayrollSchema } from '../src/validation/schemas.js';
 
 const ids = {
   first: '507f1f77bcf86cd799439011',
@@ -60,6 +60,13 @@ test('rejects invalid hours and invalid payroll periods', () => {
     currency: 'USD',
     configuredHourlyRate: 40,
   }).success, false);
+});
+
+test('requires a reason for every payroll decision', () => {
+  const review = { status: 'approved', reviewedBy: ids.first };
+  assert.equal(reviewPayrollSchema.safeParse({ ...review, reviewReason: 'Verified against the approved corrective work.' }).success, true);
+  assert.equal(reviewPayrollSchema.safeParse(review).success, false);
+  assert.equal(reviewPayrollSchema.safeParse({ ...review, reviewReason: ' ' }).success, false);
 });
 
 test('calculation engine only processes the entries it receives', () => {

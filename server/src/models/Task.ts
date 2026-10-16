@@ -5,6 +5,7 @@ export interface TaskDocument extends Document {
   projectId: Types.ObjectId;
   title: string;
   description?: string;
+  committedAt?: Date;
   progressDescription?: string;
   reviewStatus: 'not_submitted' | 'submitted' | 'changes_requested' | 'accepted';
   reviewReason?: string;
@@ -14,6 +15,13 @@ export interface TaskDocument extends Document {
   status: TaskStatus;
   originalCompletedAt?: Date;
   currentCompletedAt?: Date;
+  statusHistory: Array<{
+    fromStatus?: TaskStatus;
+    toStatus: TaskStatus;
+    changedBy: Types.ObjectId;
+    changedAt: Date;
+    reason?: string;
+  }>;
   createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -24,6 +32,7 @@ const taskSchema = new Schema<TaskDocument>(
     projectId: { type: Schema.Types.ObjectId, required: true, ref: 'Project', index: true },
     title: { type: String, required: true, trim: true, minlength: 1, maxlength: 200 },
     description: { type: String, trim: true, maxlength: 4000 },
+    committedAt: { type: Date },
     progressDescription: { type: String, trim: true, maxlength: 4000 },
     reviewStatus: { type: String, enum: ['not_submitted', 'submitted', 'changes_requested', 'accepted'], default: 'not_submitted', required: true, index: true },
     reviewReason: { type: String, trim: true, maxlength: 2000 },
@@ -33,6 +42,13 @@ const taskSchema = new Schema<TaskDocument>(
     status: { type: String, enum: taskStatuses, default: 'assigned', required: true, index: true },
     originalCompletedAt: { type: Date },
     currentCompletedAt: { type: Date },
+    statusHistory: [{
+      fromStatus: { type: String, enum: taskStatuses },
+      toStatus: { type: String, enum: taskStatuses, required: true },
+      changedBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
+      changedAt: { type: Date, required: true, default: Date.now },
+      reason: { type: String, trim: true, maxlength: 2000 },
+    }],
     createdBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
   },
   { timestamps: true },

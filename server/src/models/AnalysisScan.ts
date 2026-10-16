@@ -1,12 +1,18 @@
 import { Schema, model, type Document, type Model, type Types } from 'mongoose';
+import { defectCauses, type DefectCause } from '../types/domain.js';
 
 export const scanStatuses = ['queued', 'running', 'completed', 'failed'] as const;
 export type ScanStatus = (typeof scanStatuses)[number];
+export const aiScanStatuses = ['queued', 'running', 'completed', 'failed', 'skipped'] as const;
+export type AiScanStatus = (typeof aiScanStatuses)[number];
 export const findingStatuses = ['needs_review', 'confirmed_bug', 'false_positive', 'needs_information', 'accepted_risk'] as const;
 export type FindingStatus = (typeof findingStatuses)[number];
 
 export interface AnalysisFinding {
   _id: Types.ObjectId;
+  source: 'static' | 'local_ai';
+  confidence?: number;
+  suggestedCause?: DefectCause;
   ruleId: string;
   tool: string;
   title: string;
@@ -32,6 +38,11 @@ export interface AnalysisScanDocument extends Document {
   description?: string;
   status: ScanStatus;
   errorMessage?: string;
+  aiStatus: AiScanStatus;
+  aiError?: string;
+  aiFilesAnalyzed: number;
+  aiFilesSkipped: number;
+  aiRejectedFindings: number;
   filesAnalyzed: number;
   totalFindings: number;
   findings: Types.DocumentArray<AnalysisFinding>;
@@ -40,6 +51,9 @@ export interface AnalysisScanDocument extends Document {
 }
 
 const findingSchema = new Schema<AnalysisFinding>({
+  source: { type: String, enum: ['static', 'local_ai'], default: 'static', required: true },
+  confidence: { type: Number, min: 1, max: 10 },
+  suggestedCause: { type: String, enum: defectCauses },
   ruleId: { type: String, required: true },
   tool: { type: String, required: true },
   title: { type: String, required: true },
@@ -65,6 +79,11 @@ const scanSchema = new Schema<AnalysisScanDocument>({
   description: { type: String, trim: true, maxlength: 2000 },
   status: { type: String, enum: scanStatuses, default: 'queued', required: true, index: true },
   errorMessage: { type: String, maxlength: 2000 },
+  aiStatus: { type: String, enum: aiScanStatuses, default: 'skipped', required: true },
+  aiError: { type: String, maxlength: 2000 },
+  aiFilesAnalyzed: { type: Number, default: 0 },
+  aiFilesSkipped: { type: Number, default: 0 },
+  aiRejectedFindings: { type: Number, default: 0 },
   filesAnalyzed: { type: Number, default: 0 },
   totalFindings: { type: Number, default: 0 },
   findings: { type: [findingSchema], default: [] },

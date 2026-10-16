@@ -6,7 +6,7 @@ import { Defect } from '../models/Defect.js';
 import { Task } from '../models/Task.js';
 import { HttpError } from '../middleware/errors.js';
 import { canReportDefect } from '../services/defectRules.js';
-import { analyzeSource, readZipSource } from '../services/codeAnalysis.js';
+import { analyzeSource, analyzeSourceWithLocalAi, isLocalAiAnalysisEnabled, readZipSource } from '../services/codeAnalysis.js';
 
 export const uploadProject = multer({
   storage: multer.memoryStorage(),
@@ -44,6 +44,7 @@ export const startScan: RequestHandler = async (req, res) => {
     expectedBehavior: req.body.expectedBehavior,
     description: req.body.description,
     status: 'queued',
+    aiStatus: isLocalAiAnalysisEnabled() ? 'queued' : 'skipped',
   });
   void runScan(scan.id, req.file.buffer);
   res.status(202).json({ data: scan });
@@ -53,10 +54,54 @@ async function runScan(scanId: string, buffer: Buffer): Promise<void> {
   try {
     await AnalysisScan.findByIdAndUpdate(scanId, { status: 'running' });
     const files = await readZipSource(buffer);
-    const findings = analyzeSource(files);
-    await AnalysisScan.findByIdAndUpdate(scanId, { status: 'completed', filesAnalyzed: files.length, totalFindings: findings.length, findings });
+    const staticFindings = analyzeSource(files).map((finding) => ({ ...finding, source: 'static' as const }));
+    if (!isLocalAiAnalysisEnabled()) {
+      await AnalysisScan.findByIdAndUpdate(scanId, {
+        status: 'completed',
+        aiStatus: 'skipped',
+        filesAnalyzed: files.length,
+        totalFindings: staticFindings.length,
+        findings: staticFindings,
+      });
+      return;
+    }
+
+    await AnalysisScan.findByIdAndUpdate(scanId, {
+      status: 'running',
+      aiStatus: 'running',
+      filesAnalyzed: files.length,
+      totalFindings: staticFindings.length,
+      findings: staticFindings,
+    });
+    try {
+      const aiResult = await analyzeSourceWithLocalAi(files);
+      const findings = [...staticFindings, ...aiResult.findings];
+      await AnalysisScan.findByIdAndUpdate(scanId, {
+        status: 'completed',
+        aiStatus: 'completed',
+        aiFilesAnalyzed: aiResult.filesReviewed,
+        aiFilesSkipped: aiResult.filesSkipped,
+        aiRejectedFindings: aiResult.rejectedFindings,
+        totalFindings: findings.length,
+        findings,
+      });
+    } catch (error) {
+      await AnalysisScan.findByIdAndUpdate(scanId, {
+        status: 'completed',
+        aiStatus: 'failed',
+        aiError: error instanceof Error ? error.message : 'Local AI analysis failed',
+        aiFilesAnalyzed: 0,
+        aiFilesSkipped: files.length,
+        totalFindings: staticFindings.length,
+        findings: staticFindings,
+      });
+    }
   } catch (error) {
-    await AnalysisScan.findByIdAndUpdate(scanId, { status: 'failed', errorMessage: error instanceof Error ? error.message : 'Analysis failed' });
+    await AnalysisScan.findByIdAndUpdate(scanId, {
+      status: 'failed',
+      aiStatus: 'skipped',
+      errorMessage: error instanceof Error ? error.message : 'Analysis failed',
+    });
   }
 }
 
@@ -96,7 +141,7 @@ export const createDefectFromFinding: RequestHandler = async (req, res) => {
     module: finding.filePath,
     title: finding.title,
     description: `${finding.description}\n\nEvidence (${finding.filePath}:${finding.line}): ${finding.evidence}\n\nSuggested investigation: ${finding.suggestion}`,
-    debugInstructions: finding.suggestion,
+    debugInstructions: req.body.debugInstructions ?? finding.suggestion,
     severity: finding.severity,
     cause: req.body.cause,
     reportedBy: scan.uploadedBy,

@@ -25,10 +25,13 @@ privately. Review and payroll routes require manager or admin access.
 - `POST /api/tasks`
 - `GET /api/tasks/:id`
 - `PATCH /api/tasks/:id/status`
+- `PATCH /api/tasks/:id/review`
 - `GET /api/defects`
 - `POST /api/defects`
 - `GET /api/defects/:id`
 - `PATCH /api/defects/:id/review`
+- `PATCH /api/defects/:id/resolve`
+- `PATCH /api/defects/:id/accept-resolution`
 - `POST /api/time-entries`
 - `GET /api/time-entries`
 - `GET /api/time-entries/:id`
@@ -42,9 +45,22 @@ privately. Review and payroll routes require manager or admin access.
 - `POST /api/auth/login`
 - `POST /api/auth/register`
 - `GET /api/auth/me`
+- `GET /api/auth/users`
+- `PATCH /api/auth/users/:id/payroll-settings`
 
 All request bodies are validated with Zod. Successful creates return `201`;
 invalid input returns `400`; missing resources return `404`.
+
+Code analysis always runs its existing static checks first. When enabled, it
+also reviews bounded source chunks with a local Ollama service (defaults:
+`http://127.0.0.1:11434`, model `qwen2.5-coder:3b`). Configure
+`CODE_ANALYSIS_AI_ENABLED`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, and
+`OLLAMA_TIMEOUT_MS` in the server environment. Ollama URLs are restricted to
+local HTTP hosts so uploaded source is not sent to a remote service. If Ollama
+is unavailable, the scan completes with static results and records the AI
+failure separately. AI findings are unverified suggestions and still require
+the existing manager/admin review before they can create a defect. Uploaded
+code is not executed.
 
 Defects can only be reported for completed tasks. The task's `projectId` is
 always used when creating a defect. An approved defect reopens its task while
@@ -54,8 +70,18 @@ Corrective time entries require an approved defect. Payroll calculation uses
 only approved, unreserved corrective entries in the selected employee/date
 period and stores the exact calculation lines. Reservation and adjustment
 creation run in a MongoDB transaction, so a time entry cannot be included in
-two concurrent adjustments. Calculations create proposed adjustments only;
-they do not modify salary records or initiate payments.
+two concurrent adjustments. Rework proposals use the employee's configured
+hourly rate, salary, and currency (legacy accounts retain the INR defaults).
+Every proposal remains pending until a manager or administrator records a
+reason and approves or rejects it. Employees can see pending proposals and
+their task/module-level calculation lines in Salary adjustments; approval
+records an audit entry but does not initiate a bank payment.
+
+Tasks keep committed dates, completion timestamps, and status-change history.
+The task list includes lifecycle history with actor names and reasons when
+available. The Quality intelligence view summarizes reopen rates, fix time,
+rework by module/project/employee, and monthly approved savings and pending
+payroll proposals.
 
 Set a long random `JWT_SECRET` in the server environment. JWTs expire after
 eight hours. The API derives actor identities from the verified token and

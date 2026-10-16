@@ -2,21 +2,50 @@ import type { RequestHandler } from 'express';
 import mongoose from 'mongoose';
 import { Project } from '../models/Project.js';
 import { Task } from '../models/Task.js';
+import { User } from '../models/User.js';
 import { HttpError } from '../middleware/errors.js';
 import type { TaskStatus } from '../types/domain.js';
 import { canTransitionTask, getCompletionDates } from '../services/taskRules.js';
+import { recordAudit } from '../services/audit.js';
 
 export const listTasks: RequestHandler = async (req, res) => {
   const filter: Record<string, unknown> = typeof req.query.projectId === 'string' ? { projectId: req.query.projectId } : {};
   if (req.user?.role === 'employee') filter.assigneeId = req.user.id;
   const tasks = await Task.find(filter).sort({ updatedAt: -1 }).lean();
-  res.json({ data: tasks });
+  const actorIds = [...new Set(tasks.flatMap((task) => (task.statusHistory ?? []).map((entry) => entry.changedBy.toString())))];
+  const actors = await User.find({ _id: { $in: actorIds } }).select('_id name').lean();
+  const actorNames = new Map(actors.map((actor) => [actor._id.toString(), actor.name]));
+  res.json({
+    data: tasks.map((task) => ({
+      ...task,
+      statusHistory: (task.statusHistory ?? []).map((entry) => ({
+        ...entry,
+        changedByName: actorNames.get(entry.changedBy.toString()) ?? 'Former user',
+      })),
+    })),
+  });
 };
 
 export const createTask: RequestHandler = async (req, res) => {
   const project = await Project.exists({ _id: req.body.projectId });
   if (!project) throw new HttpError(404, 'Project not found');
-  const task = await Task.create({ ...req.body, createdBy: req.user!.id });
+  const task = await Task.create({
+    ...req.body,
+    createdBy: req.user!.id,
+    statusHistory: [{
+      toStatus: req.body.status ?? 'assigned',
+      changedBy: req.user!.id,
+      changedAt: new Date(),
+      reason: 'Task created',
+    }],
+  });
+  await recordAudit({
+    actorId: new mongoose.Types.ObjectId(req.user!.id),
+    entityType: 'Task',
+    entityId: task._id,
+    action: 'task_created',
+    after: { status: task.status, assigneeId: task.assigneeId, committedAt: task.committedAt },
+  });
   res.status(201).json({ data: task });
 };
 
@@ -38,11 +67,29 @@ export const updateTaskStatus: RequestHandler = async (req, res) => {
     throw new HttpError(400, `Invalid task status transition from ${task.status} to ${nextStatus}`);
   }
 
+  const previousStatus = task.status;
+  const changedAt = new Date();
   task.status = nextStatus;
-  const completionDates = getCompletionDates(nextStatus, task.originalCompletedAt, new Date());
+  const completionDates = getCompletionDates(nextStatus, task.originalCompletedAt, changedAt);
   task.originalCompletedAt = completionDates.originalCompletedAt;
   task.currentCompletedAt = completionDates.currentCompletedAt;
+  task.statusHistory.push({
+    fromStatus: previousStatus,
+    toStatus: nextStatus,
+    changedBy: new mongoose.Types.ObjectId(req.user!.id),
+    changedAt,
+    reason: req.body.reason,
+  });
   await task.save();
+  await recordAudit({
+    actorId: new mongoose.Types.ObjectId(req.user!.id),
+    entityType: 'Task',
+    entityId: task._id,
+    action: 'task_status_changed',
+    before: { status: previousStatus },
+    after: { status: nextStatus, changedAt },
+    reason: req.body.reason,
+  });
   res.json({ data: task });
 };
 
@@ -73,11 +120,30 @@ export const reviewTask: RequestHandler = async (req, res) => {
   task.reviewStatus = req.body.reviewStatus;
   task.reviewReason = req.body.reviewReason;
   task.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
+  const previousStatus = task.status;
   if (req.body.reviewStatus === 'accepted') task.status = 'closed';
   if (req.body.reviewStatus === 'changes_requested') task.status = 'under_fix';
+  if (task.status !== previousStatus) {
+    task.statusHistory.push({
+      fromStatus: previousStatus,
+      toStatus: task.status,
+      changedBy: new mongoose.Types.ObjectId(req.user!.id),
+      changedAt: new Date(),
+      reason: req.body.reviewReason,
+    });
+  }
   await task.save();
   await Project.findByIdAndUpdate(task.projectId, {
     status: req.body.reviewStatus === 'accepted' ? 'completed' : 'active',
+  });
+  await recordAudit({
+    actorId: new mongoose.Types.ObjectId(req.user!.id),
+    entityType: 'Task',
+    entityId: task._id,
+    action: `task_review_${req.body.reviewStatus}`,
+    before: { status: previousStatus, reviewStatus: 'submitted' },
+    after: { status: task.status, reviewStatus: task.reviewStatus },
+    reason: req.body.reviewReason,
   });
   res.json({ data: task });
 };

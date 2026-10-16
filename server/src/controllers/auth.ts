@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import type { RequestHandler } from 'express';
 import { User } from '../models/User.js';
 import { HttpError } from '../middleware/errors.js';
+import mongoose from 'mongoose';
+import { recordAudit } from '../services/audit.js';
 
 function jwtSecret(): string {
   const secret = process.env.JWT_SECRET;
@@ -37,8 +39,8 @@ export const registerEmployee: RequestHandler = async (req, res) => {
 };
 
 export const listUsers: RequestHandler = async (_req, res) => {
-  const users = await User.find().select('_id name email role active createdAt updatedAt').sort({ createdAt: -1 }).lean();
-  res.json({ data: users.map((user) => ({ id: String(user._id), name: user.name, email: user.email, role: user.role, active: user.active, createdAt: user.createdAt, updatedAt: user.updatedAt })) });
+  const users = await User.find().select('_id name email role active hourlyRate baseSalary payrollCurrency createdAt updatedAt').sort({ createdAt: -1 }).lean();
+  res.json({ data: users.map((user) => ({ id: String(user._id), name: user.name, email: user.email, role: user.role, active: user.active, hourlyRate: user.hourlyRate ?? 1000, baseSalary: user.baseSalary ?? 50000, payrollCurrency: user.payrollCurrency ?? 'INR', createdAt: user.createdAt, updatedAt: user.updatedAt })) });
 };
 
 export const createStaff: RequestHandler = async (req, res) => {
@@ -50,6 +52,9 @@ export const createStaff: RequestHandler = async (req, res) => {
     passwordHash: await bcrypt.hash(req.body.password, 12),
     role: req.body.role,
     active: true,
+    hourlyRate: req.body.hourlyRate,
+    baseSalary: req.body.baseSalary,
+    payrollCurrency: req.body.payrollCurrency,
   });
   res.status(201).json({ data: { user: publicUser(user) } });
 };
@@ -59,6 +64,29 @@ export const updateUserStatus: RequestHandler = async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { active: req.body.active }, { new: true }).lean();
   if (!user) throw new HttpError(404, 'User account not found');
   res.json({ data: { user: { ...publicUser(user), active: user.active } } });
+};
+
+export const updateUserPayrollSettings: RequestHandler = async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) throw new HttpError(404, 'User account not found');
+  const before = {
+    hourlyRate: user.hourlyRate ?? 1000,
+    baseSalary: user.baseSalary ?? 50000,
+    payrollCurrency: user.payrollCurrency ?? 'INR',
+  };
+  user.hourlyRate = req.body.hourlyRate;
+  user.baseSalary = req.body.baseSalary;
+  user.payrollCurrency = req.body.payrollCurrency;
+  await user.save();
+  await recordAudit({
+    actorId: new mongoose.Types.ObjectId(req.user!.id),
+    entityType: 'User',
+    entityId: user._id,
+    action: 'user_payroll_settings_updated',
+    before,
+    after: { hourlyRate: user.hourlyRate, baseSalary: user.baseSalary, payrollCurrency: user.payrollCurrency },
+  });
+  res.json({ data: { user: { ...publicUser(user), active: user.active, hourlyRate: user.hourlyRate, baseSalary: user.baseSalary, payrollCurrency: user.payrollCurrency } } });
 };
 
 export const me: RequestHandler = async (req, res) => {

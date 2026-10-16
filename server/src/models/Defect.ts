@@ -26,6 +26,7 @@ export interface DefectDocument extends Document {
   resolutionSubmittedBy?: Types.ObjectId;
   severity: DefectSeverity;
   cause: DefectCause;
+  foundAt: Date;
   status: DefectStatus;
   reportedBy: Types.ObjectId;
   reviewedBy?: Types.ObjectId;
@@ -53,6 +54,7 @@ const defectSchema = new Schema<DefectDocument>(
     resolutionSubmittedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     severity: { type: String, enum: defectSeverities, required: true },
     cause: { type: String, enum: defectCauses, required: true },
+    foundAt: { type: Date, required: true, default: Date.now, index: true },
     status: { type: String, enum: defectStatuses, default: 'reported', required: true, index: true },
     reportedBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },

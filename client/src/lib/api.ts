@@ -19,6 +19,7 @@ export type Task = {
   projectId: string
   title: string
   module: string
+  foundAt: string
   description?: string
   debugInstructions?: string
   resolutionDescription?: string
@@ -32,6 +33,15 @@ export type Task = {
   status: 'assigned' | 'in_progress' | 'completed' | 'reopened' | 'under_fix' | 'closed'
   originalCompletedAt?: string
   currentCompletedAt?: string
+  committedAt?: string
+  statusHistory?: Array<{
+    fromStatus?: Task['status']
+    toStatus: Task['status']
+    changedBy: string
+    changedByName?: string
+    changedAt: string
+    reason?: string
+  }>
   createdBy: string
   createdAt: string
   updatedAt: string
@@ -55,6 +65,7 @@ export type Defect = {
   resolutionSubmittedAt?: string
   severity: 'low' | 'medium' | 'high' | 'critical'
   cause: 'code_defect' | 'requirement_change' | 'external_dependency' | 'other'
+  foundAt?: string
   status: 'reported' | 'under_review' | 'approved' | 'exempted' | 'resolved'
   reportedBy: string
   reviewedBy?: string
@@ -105,6 +116,10 @@ export type PayrollAdjustment = {
     hours: number
     hourlyRate: number
     amount: number
+    taskTitle?: string
+    module?: string
+    defectTitle?: string
+    cause?: Defect['cause']
   }>
   status: 'draft' | 'pending_review' | 'approved' | 'rejected' | 'voided'
   reviewedBy?: string
@@ -116,9 +131,12 @@ export type PayrollAdjustment = {
 
 export type AuthUser = { id: string; name: string; email: string; role: 'employee' | 'manager' | 'admin' }
 export type DirectoryEmployee = { id: string; name: string; email: string }
-export type ManagedUser = { id: string; name: string; email: string; role: AuthUser['role']; active: boolean; createdAt: string; updatedAt: string }
+export type ManagedUser = { id: string; name: string; email: string; role: AuthUser['role']; active: boolean; hourlyRate: number; baseSalary: number; payrollCurrency: string; createdAt: string; updatedAt: string }
 export type AnalysisFinding = {
   _id: string
+  source?: 'static' | 'local_ai'
+  confidence?: number
+  suggestedCause?: Defect['cause']
   ruleId: string
   tool: string
   title: string
@@ -144,6 +162,11 @@ export type AnalysisScan = {
   description?: string
   status: 'queued' | 'running' | 'completed' | 'failed'
   errorMessage?: string
+  aiStatus?: 'queued' | 'running' | 'completed' | 'failed' | 'skipped'
+  aiError?: string
+  aiFilesAnalyzed?: number
+  aiFilesSkipped?: number
+  aiRejectedFindings?: number
   filesAnalyzed: number
   totalFindings: number
   findings: AnalysisFinding[]
@@ -217,11 +240,14 @@ function isDataEnvelope<T>(payload: unknown): payload is ApiEnvelope<T> {
 
 export const api = {
   getToken: () => window.localStorage.getItem(TOKEN_KEY),
-  login: async (email: string, password: string) => {
+  login: async (email: string, password: string, selectedRole: AuthUser['role']) => {
     const data = await request<{ token: string; user: AuthUser }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     })
+    if (data.user.role !== selectedRole) {
+      throw new Error('This account does not have the selected role. Choose the role assigned to your account.')
+    }
     window.localStorage.setItem(TOKEN_KEY, data.token)
     return data.user
   },
@@ -231,13 +257,17 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   listUsers: () => request<ManagedUser[]>('/api/auth/users'),
-  createStaff: (payload: { name: string; email: string; password: string; role: 'employee' | 'manager' }) => request<{ user: AuthUser }>('/api/auth/users', {
+  createStaff: (payload: { name: string; email: string; password: string; role: 'employee' | 'manager'; hourlyRate: number; baseSalary: number; payrollCurrency: string }) => request<{ user: AuthUser }>('/api/auth/users', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
   updateUserStatus: (userId: string, active: boolean) => request<{ user: ManagedUser }>(`/api/auth/users/${userId}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ active }),
+  }),
+  updateUserPayrollSettings: (userId: string, payload: Pick<ManagedUser, 'hourlyRate' | 'baseSalary' | 'payrollCurrency'>) => request<{ user: ManagedUser }>(`/api/auth/users/${userId}/payroll-settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
   }),
   logout: () => window.localStorage.removeItem(TOKEN_KEY),
   listProjects: (signal?: AbortSignal) => request<Project[]>('/api/projects', { signal }),
@@ -247,7 +277,7 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   listTasks: (projectId?: string, signal?: AbortSignal) => request<Task[]>(`/api/tasks${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`, { signal }),
-  createTask: (payload: { projectId: string; title: string; description?: string; assigneeId: string; assigneeName: string; createdBy: string }) => request<Task>('/api/tasks', {
+  createTask: (payload: { projectId: string; title: string; description?: string; assigneeId: string; assigneeName: string; createdBy: string; committedAt?: string }) => request<Task>('/api/tasks', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
@@ -289,9 +319,9 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify(payload),
   }),
-  createDefectFromFinding: (scanId: string, findingId: string, cause: Defect['cause']) => request<Defect>(`/api/analysis/scans/${scanId}/findings/${findingId}/defect`, {
+  createDefectFromFinding: (scanId: string, findingId: string, cause: Defect['cause'], debugInstructions?: string) => request<Defect>(`/api/analysis/scans/${scanId}/findings/${findingId}/defect`, {
     method: 'POST',
-    body: JSON.stringify({ cause }),
+    body: JSON.stringify({ cause, ...(debugInstructions ? { debugInstructions } : {}) }),
   }),
   listTimeEntries: (filters?: { employeeId?: string; taskId?: string; defectId?: string; approvalStatus?: TimeEntry['approvalStatus']; startDate?: string; endDate?: string }, signal?: AbortSignal) => {
     const query = new URLSearchParams(Object.entries(filters ?? {}).filter(([, value]) => value !== undefined) as Array<[string, string]>).toString()
@@ -311,7 +341,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-  reviewPayroll: (adjustmentId: string, payload: { status: 'approved' | 'rejected'; reviewedBy: string; reviewReason?: string }) => request<PayrollAdjustment>(`/api/payroll/${adjustmentId}/review`, {
+  reviewPayroll: (adjustmentId: string, payload: { status: 'approved' | 'rejected'; reviewedBy: string; reviewReason: string }) => request<PayrollAdjustment>(`/api/payroll/${adjustmentId}/review`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   }),

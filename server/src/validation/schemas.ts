@@ -18,6 +18,7 @@ export const createTaskSchema = z.object({
   projectId: objectId,
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(4000).optional(),
+  committedAt: z.coerce.date().optional(),
   assigneeId: objectId,
   assigneeName: z.string().trim().min(1).max(160),
   status: z.enum(taskStatuses).optional(),
@@ -26,6 +27,7 @@ export const createTaskSchema = z.object({
 
 export const updateTaskStatusSchema = z.object({
   status: z.enum(taskStatuses),
+  reason: z.string().trim().max(2000).optional(),
 });
 
 export const updateTaskProgressSchema = z.object({
@@ -86,6 +88,7 @@ export const reviewFindingSchema = z.object({
 
 export const createDefectFromFindingSchema = z.object({
   cause: z.enum(defectCauses),
+  debugInstructions: z.string().trim().min(1).max(4000).optional(),
 });
 
 const date = z.coerce.date();
@@ -139,11 +142,7 @@ export const calculatePayrollSchema = z.object({
 export const reviewPayrollSchema = z.object({
   status: z.enum(['approved', 'rejected']),
   reviewedBy: objectId,
-  reviewReason: z.string().trim().max(2000).optional(),
-}).superRefine((value, context) => {
-  if (value.status === 'rejected' && !value.reviewReason) {
-    context.addIssue({ code: 'custom', path: ['reviewReason'], message: 'A rejection reason is required' });
-  }
+  reviewReason: z.string().trim().min(1, 'A review reason is required').max(2000),
 });
 
 export const voidPayrollSchema = z.object({
@@ -167,6 +166,15 @@ export const createStaffSchema = z.object({
   email: z.string().trim().email().max(320),
   password: z.string().min(6).max(200),
   role: z.enum(['employee', 'manager']),
+  hourlyRate: z.number().finite().nonnegative().max(100000).default(1000),
+  baseSalary: z.number().finite().nonnegative().max(100000000).default(50000),
+  payrollCurrency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()).default('INR'),
+});
+
+export const updateUserPayrollSchema = z.object({
+  hourlyRate: z.number().finite().nonnegative().max(100000),
+  baseSalary: z.number().finite().nonnegative().max(100000000),
+  payrollCurrency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()),
 });
 
 export const updateUserStatusSchema = z.object({
