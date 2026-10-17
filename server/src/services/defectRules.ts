@@ -15,5 +15,5 @@ export function validateReviewDecision(status: DefectStatus, reviewReason?: stri
 }
 
 export function shouldReopenTask(reviewStatus: DefectStatus, taskStatus: TaskStatus): boolean {
-  return reviewStatus === 'approved' && taskStatus === 'completed';
+  return reviewStatus === 'approved' && (taskStatus === 'completed' || taskStatus === 'closed');
 }

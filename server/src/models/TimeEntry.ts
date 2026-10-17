@@ -9,6 +9,10 @@ export interface TimeEntryDocument extends Document {
   hours: number;
   description?: string;
   category: TimeEntryCategory;
+  source: 'manual' | 'resolution_submission' | 'manager_backfill';
+  compensationHourlyRate?: number;
+  compensationBaseSalary?: number;
+  compensationCurrency?: string;
   approvalStatus: ApprovalStatus;
   reviewedBy?: Types.ObjectId;
   reviewedAt?: Date;
@@ -27,6 +31,10 @@ const timeEntrySchema = new Schema<TimeEntryDocument>(
     hours: { type: Number, required: true, min: 0.01, max: 24 },
     description: { type: String, trim: true, maxlength: 2000 },
     category: { type: String, enum: timeEntryCategories, required: true, index: true },
+    source: { type: String, enum: ['manual', 'resolution_submission', 'manager_backfill'], required: true, default: 'manual' },
+    compensationHourlyRate: { type: Number, min: 0, max: 100000 },
+    compensationBaseSalary: { type: Number, min: 0, max: 100000000 },
+    compensationCurrency: { type: String, uppercase: true, minlength: 3, maxlength: 3 },
     approvalStatus: { type: String, enum: approvalStatuses, default: 'pending', required: true, index: true },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: { type: Date },
@@ -38,5 +46,9 @@ const timeEntrySchema = new Schema<TimeEntryDocument>(
 
 timeEntrySchema.index({ employeeId: 1, date: 1, approvalStatus: 1 });
 timeEntrySchema.index({ payrollAdjustmentId: 1, approvalStatus: 1 });
+timeEntrySchema.index(
+  { defectId: 1, source: 1 },
+  { unique: true, partialFilterExpression: { source: 'resolution_submission' } },
+);
 
 export const TimeEntry: Model<TimeEntryDocument> = model<TimeEntryDocument>('TimeEntry', timeEntrySchema);

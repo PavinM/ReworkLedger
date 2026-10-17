@@ -443,7 +443,7 @@ function App() {
           {activePage === 'Quality intelligence' && <QualityPanel defects={liveDefects} entries={timeEntries} tasks={tasks} projects={projects} adjustments={payrollAdjustments} />}
           {activePage === 'Settings' && <SettingsPanel currentUser={authUser} onLogout={logout} onProfileUpdated={setAuthUser} showToast={setToast} />}
           {activePage === 'Salary adjustments' && (authUser.role === 'manager' || authUser.role === 'admin') && <PayrollReviewPanel adjustments={payrollAdjustments} currentUser={authUser} onChanged={retryData} onNotify={setToast} />}
-          {activePage === 'Salary adjustments' && authUser.role === 'employee' && <EmployeePayrollView adjustments={payrollAdjustments} />}
+          {activePage === 'Salary adjustments' && authUser.role === 'employee' && <EmployeePayrollView adjustments={payrollAdjustments} onChanged={retryData} onNotify={setToast} />}
             </motion.div>
           </AnimatePresence>
           <footer className="page-footer"><span><ShieldCheck size={13} /> Evidence-based workflow with manager review.</span><span>ReworkLedger · v1.0.0</span></footer>
@@ -486,7 +486,23 @@ function EmptyData({ loading, message }: { loading: boolean; message: string }) 
   return <div className="empty-data" aria-live="polite">{loading ? 'Loading live data…' : message}</div>
 }
 
-function EmployeePayrollView({ adjustments }: { adjustments: PayrollAdjustment[] }) {
+function EmployeePayrollView({ adjustments, onChanged, onNotify }: { adjustments: PayrollAdjustment[]; onChanged: () => void; onNotify: (message: string) => void }) {
+  const [disputeReasons, setDisputeReasons] = useState<Record<string, string>>({})
+  const [disputingId, setDisputingId] = useState<string | null>(null)
+  const submitDispute = async (adjustment: PayrollAdjustment) => {
+    const reason = disputeReasons[adjustment._id]?.trim()
+    if (!reason) return
+    setDisputingId(adjustment._id)
+    try {
+      await api.submitPayrollDispute(adjustment._id, reason)
+      onNotify('Payroll deduction dispute submitted for manager review')
+      onChanged()
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : 'Unable to submit payroll dispute')
+    } finally {
+      setDisputingId(null)
+    }
+  }
   return <section className="workflow-grid workflow-grid-single"><article className="surface workflow-list employee-payroll-view"><div className="section-heading"><div><h2>My salary adjustments</h2><p>Advance notice for proposed payroll changes, with the task, module, hours, and calculation behind each line. Pending amounts are not deducted until approved.</p></div></div>{adjustments.length ? <div className="employee-payroll-list">{adjustments.map((adjustment) => <article className="employee-payroll-card" key={adjustment._id}>
     <header className="employee-payroll-card-header">
       <div className="employee-payroll-card-total">
@@ -505,6 +521,9 @@ function EmployeePayrollView({ adjustments }: { adjustments: PayrollAdjustment[]
       <div><strong>{line.taskTitle ?? `Task ${line.taskId.slice(-8)}`}</strong><span>{line.module ?? line.defectTitle ?? `Defect ${line.defectId.slice(-8)}`}</span></div>
       <p>{line.hours.toFixed(2)}h × {adjustment.currency} {line.hourlyRate.toFixed(2)} = <strong>{adjustment.currency} {line.amount.toFixed(2)}</strong></p>
     </div>)}</div>}
+    {adjustment.disputeStatus === 'pending' && <p className="employee-payroll-note"><strong>Dispute under review</strong>{adjustment.disputeReason}</p>}
+    {(adjustment.disputeStatus === 'accepted' || adjustment.disputeStatus === 'denied') && <p className="employee-payroll-note"><strong>Dispute {adjustment.disputeStatus}</strong>{adjustment.disputeResolution}</p>}
+    {adjustment.status === 'pending_review' && adjustment.adjustmentType === 'debit' && (!adjustment.disputeStatus || adjustment.disputeStatus === 'none') && <div className="employee-payroll-note"><label htmlFor={`dispute-${adjustment._id}`}>Dispute this proposed deduction<textarea id={`dispute-${adjustment._id}`} value={disputeReasons[adjustment._id] ?? ''} onChange={(event) => setDisputeReasons((current) => ({ ...current, [adjustment._id]: event.target.value }))} maxLength={2000} placeholder="Explain why this deduction should be reviewed" /></label><button className="export-button" disabled={disputingId === adjustment._id || !disputeReasons[adjustment._id]?.trim()} onClick={() => void submitDispute(adjustment)}>{disputingId === adjustment._id ? 'Submitting…' : 'Submit dispute'}</button></div>}
     {adjustment.reviewReason && <p className="employee-payroll-note"><strong>Review note</strong>{adjustment.reviewReason}</p>}
   </article>)}</div> : <EmptyData loading={false} message="No payroll proposals are available for your profile." />}</article></section>
 }
@@ -519,9 +538,14 @@ function QualityPanel({ defects, entries, tasks, projects, adjustments }: { defe
     if (entry.defectId) result.set(entry.defectId, (result.get(entry.defectId) ?? 0) + entry.hours)
     return result
   }, new Map<string, number>())
-  const deliveredTasks = tasks.filter((task) => task.originalCompletedAt || task.currentCompletedAt)
-  const reopenedTasks = deliveredTasks.filter((task) => task.status === 'reopened' || task.statusHistory?.some((item) => item.toStatus === 'reopened'))
-  const reopenRate = deliveredTasks.length ? reopenedTasks.length / deliveredTasks.length * 100 : 0
+  const deliveryCount = (task: Task) => task.deliveryHistory?.length || (task.originalCompletedAt || task.currentCompletedAt ? 1 : 0)
+  const reopenCount = (task: Task) => {
+    const recordedReopens = task.statusHistory?.filter((item) => item.toStatus === 'reopened').length ?? 0
+    return recordedReopens || (task.status === 'reopened' ? 1 : 0)
+  }
+  const deliveredCount = tasks.reduce((total, task) => total + deliveryCount(task), 0)
+  const reopenedCount = tasks.reduce((total, task) => total + reopenCount(task), 0)
+  const reopenRate = deliveredCount ? reopenedCount / deliveredCount * 100 : 0
   const resolvedDefects = defects.filter((defect) => defect.status === 'resolved' && defect.resolutionSubmittedAt)
   const averageFixHours = resolvedDefects.length
     ? resolvedDefects.reduce((sum, defect) => sum + Math.max(0, new Date(defect.resolutionSubmittedAt!).getTime() - new Date(defect.createdAt).getTime()) / 3_600_000, 0) / resolvedDefects.length
@@ -545,8 +569,8 @@ function QualityPanel({ defects, entries, tasks, projects, adjustments }: { defe
   const projectMetrics = tasks.reduce((result, task) => {
     const name = projectById.get(task.projectId) ?? `Project ${task.projectId.slice(-8)}`
     const metric = result.get(name) ?? { deliveries: 0, reopened: 0, defects: 0, hours: 0 }
-    if (task.originalCompletedAt || task.currentCompletedAt) metric.deliveries += 1
-    if (task.status === 'reopened' || task.statusHistory?.some((item) => item.toStatus === 'reopened')) metric.reopened += 1
+    metric.deliveries += deliveryCount(task)
+    metric.reopened += reopenCount(task)
     result.set(name, metric)
     return result
   }, new Map<string, { deliveries: number; reopened: number; defects: number; hours: number }>())
@@ -559,27 +583,41 @@ function QualityPanel({ defects, entries, tasks, projects, adjustments }: { defe
     metric.hours += defectHours.get(defect._id) ?? 0
     projectMetrics.set(name, metric)
   })
-  const employeeMetrics = tasks.reduce((result, task) => {
-    const metric = result.get(task.assigneeName) ?? { deliveries: 0, reopened: 0, hours: 0, defects: new Set<string>() }
-    if (task.originalCompletedAt || task.currentCompletedAt) metric.deliveries += 1
-    if (task.status === 'reopened' || task.statusHistory?.some((item) => item.toStatus === 'reopened')) metric.reopened += 1
-    result.set(task.assigneeName, metric)
-    return result
-  }, new Map<string, { deliveries: number; reopened: number; hours: number; defects: Set<string> }>())
+  const employeeMetrics = new Map<string, { deliveries: number; reopened: number; hours: number; defects: Set<string> }>()
+  const getEmployeeMetric = (name: string) => {
+    const metric = employeeMetrics.get(name) ?? { deliveries: 0, reopened: 0, hours: 0, defects: new Set<string>() }
+    employeeMetrics.set(name, metric)
+    return metric
+  }
+  tasks.forEach((task) => {
+    const deliveries = task.deliveryHistory ?? []
+    if (deliveries.length) {
+      deliveries.forEach((delivery) => delivery.contributors.forEach((contributor) => {
+        getEmployeeMetric(contributor.name).deliveries += 1
+      }))
+    } else if (task.originalCompletedAt || task.currentCompletedAt) {
+      getEmployeeMetric(task.assigneeName).deliveries += 1
+    }
+    const taskReopens = reopenCount(task)
+    if (taskReopens) {
+      const owners = deliveries[0]?.contributors.map((contributor) => contributor.name) ?? [task.assigneeName]
+      owners.forEach((owner) => { getEmployeeMetric(owner).reopened += taskReopens })
+    }
+  })
   defects.forEach((defect) => {
     const task = taskById.get(defect.taskId)
-    if (!task) return
-    const metric = employeeMetrics.get(task.assigneeName) ?? { deliveries: 0, reopened: 0, hours: 0, defects: new Set<string>() }
+    const owner = defect.originalAssigneeName ?? task?.assigneeName
+    if (!owner) return
+    const metric = getEmployeeMetric(owner)
     metric.defects.add(defect._id)
-    employeeMetrics.set(task.assigneeName, metric)
   })
   entries.filter((entry) => entry.category === 'corrective_work').forEach((entry) => {
     const task = taskById.get(entry.taskId)
-    if (!task) return
-    const metric = employeeMetrics.get(task.assigneeName) ?? { deliveries: 0, reopened: 0, hours: 0, defects: new Set<string>() }
+    const owner = entry.employeeName ?? task?.assigneeName
+    if (!owner) return
+    const metric = getEmployeeMetric(owner)
     metric.hours += entry.hours
     if (entry.defectId) metric.defects.add(entry.defectId)
-    employeeMetrics.set(task.assigneeName, metric)
   })
   const monthlyPayroll = adjustments.reduce((result, adjustment) => {
     const month = new Date(adjustment.periodStart).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
@@ -589,7 +627,7 @@ function QualityPanel({ defects, entries, tasks, projects, adjustments }: { defe
     result.set(month, metric)
     return result
   }, new Map<string, { pending: number; savings: number; currency: string }>())
-  return <section className="workflow-grid workflow-grid-single"><article className="surface workflow-list"><div className="section-heading"><div><h2>Quality intelligence</h2><p>Delivery quality, reopened work, corrective effort, and payroll impact from current records.</p></div></div><div className="overview-strip"><OverviewMetric label="Total defects" value={String(defects.length)} note="Current workspace" icon={AlertCircle} accent="danger" /><OverviewMetric label="Corrective hours" value={`${correctiveHours.toFixed(2)}h`} note="All submitted entries" icon={Timer} accent="amber" /><OverviewMetric label="Approved hours" value={`${approvedHours.toFixed(2)}h`} note="Reviewed entries" icon={Check} accent="lime" /><OverviewMetric label="Reopen rate" value={`${reopenRate.toFixed(1)}%`} note={`${reopenedTasks.length} of ${deliveredTasks.length} delivered tasks`} icon={AlertCircle} accent="danger" /><OverviewMetric label="Average fix time" value={`${averageFixHours.toFixed(1)}h`} note="Report to fix submission" icon={Timer} accent="amber" /></div><h3>Rework by module</h3>{Array.from(moduleMetrics, ([module, metric]) => <div className="workflow-row" key={module}><strong>{module}</strong><span>{metric.defects} defects · {metric.hours.toFixed(2)}h · avg fix {metric.fixed ? `${(metric.fixHours / metric.fixed).toFixed(1)}h` : 'n/a'}</span></div>)}<h3>Rework by project</h3>{Array.from(projectMetrics, ([name, metric]) => <div className="workflow-row" key={name}><strong>{name}</strong><span>{metric.defects} defects · {metric.hours.toFixed(2)}h · reopen rate {metric.deliveries ? `${(metric.reopened / metric.deliveries * 100).toFixed(1)}%` : 'n/a'}</span></div>)}<h3>Rework by employee</h3>{Array.from(employeeMetrics, ([name, metric]) => <div className="workflow-row" key={name}><strong>{name}</strong><span>{metric.defects.size} defects · {metric.hours.toFixed(2)}h · reopen rate {metric.deliveries ? `${(metric.reopened / metric.deliveries * 100).toFixed(1)}%` : 'n/a'}</span></div>)}<h3>Defects by cause</h3>{Object.entries(causes).map(([cause, count]) => <div className="workflow-row" key={cause}><strong>{cause.replaceAll('_', ' ')}</strong><span className="status status-warning"><i />{count}</span></div>)}<h3>Monthly payroll review</h3>{Array.from(monthlyPayroll, ([month, metric]) => <div className="workflow-row" key={month}><strong>{month}</strong><span>{metric.currency} {metric.savings.toFixed(2)} approved savings · {metric.currency} {metric.pending.toFixed(2)} pending</span></div>)}</article></section>
+  return <section className="workflow-grid workflow-grid-single"><article className="surface workflow-list"><div className="section-heading"><div><h2>Quality intelligence</h2><p>Delivery quality, reopened work, corrective effort, and payroll impact from current records.</p></div></div><div className="overview-strip"><OverviewMetric label="Total defects" value={String(defects.length)} note="Current workspace" icon={AlertCircle} accent="danger" /><OverviewMetric label="Corrective hours" value={`${correctiveHours.toFixed(2)}h`} note="All submitted entries" icon={Timer} accent="amber" /><OverviewMetric label="Approved hours" value={`${approvedHours.toFixed(2)}h`} note="Reviewed entries" icon={Check} accent="lime" /><OverviewMetric label="Reopen rate" value={`${reopenRate.toFixed(1)}%`} note={`${reopenedCount} reopen events across ${deliveredCount} deliveries`} icon={AlertCircle} accent="danger" /><OverviewMetric label="Average fix time" value={`${averageFixHours.toFixed(1)}h`} note="Report to fix submission" icon={Timer} accent="amber" /></div><h3>Rework by module</h3>{Array.from(moduleMetrics, ([module, metric]) => <div className="workflow-row" key={module}><strong>{module}</strong><span>{metric.defects} defects · {metric.hours.toFixed(2)}h · avg fix {metric.fixed ? `${(metric.fixHours / metric.fixed).toFixed(1)}h` : 'n/a'}</span></div>)}<h3>Rework by project</h3>{Array.from(projectMetrics, ([name, metric]) => <div className="workflow-row" key={name}><strong>{name}</strong><span>{metric.defects} defects · {metric.hours.toFixed(2)}h · reopen rate {metric.deliveries ? `${(metric.reopened / metric.deliveries * 100).toFixed(1)}%` : 'n/a'}</span></div>)}<h3>Rework by employee</h3>{Array.from(employeeMetrics, ([name, metric]) => <div className="workflow-row" key={name}><strong>{name}</strong><span>{metric.defects.size} defects · {metric.hours.toFixed(2)}h · reopen rate {metric.deliveries ? `${(metric.reopened / metric.deliveries * 100).toFixed(1)}%` : 'n/a'}</span></div>)}<h3>Defects by cause</h3>{Object.entries(causes).map(([cause, count]) => <div className="workflow-row" key={cause}><strong>{cause.replaceAll('_', ' ')}</strong><span className="status status-warning"><i />{count}</span></div>)}<h3>Monthly payroll review</h3>{Array.from(monthlyPayroll, ([month, metric]) => <div className="workflow-row" key={month}><strong>{month}</strong><span>{metric.currency} {metric.savings.toFixed(2)} approved savings · {metric.currency} {metric.pending.toFixed(2)} pending</span></div>)}</article></section>
 }
 
 function SettingsPanel({ currentUser, onLogout, onProfileUpdated, showToast }: { currentUser: AuthUser; onLogout: () => void; onProfileUpdated: (user: AuthUser) => void; showToast: (message: string) => void }) {

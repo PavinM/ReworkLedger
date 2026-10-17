@@ -6,7 +6,8 @@ import { HttpError } from '../middleware/errors.js';
 import { canReportDefect, shouldReopenTask } from '../services/defectRules.js';
 import { TimeEntry } from '../models/TimeEntry.js';
 import { PayrollAdjustment } from '../models/PayrollAdjustment.js';
-import { calculateDefectSalaryAdjustment, calculateNextMonthSalary, calculateProposedAdjustment } from '../services/payrollCalculation.js';
+import { calculateNextMonthSalary } from '../services/payrollCalculation.js';
+import { calculateReworkPayroll } from '../services/reworkPayroll.js';
 import { recordAudit } from '../services/audit.js';
 import { User } from '../models/User.js';
 
@@ -26,7 +27,22 @@ export const createDefect: RequestHandler = async (req, res) => {
   if (!canReportDefect(task.status)) {
     throw new HttpError(400, 'Defects can only be reported against completed or accepted projects');
   }
-  const defect = await Defect.create({ ...req.body, foundAt: req.body.foundAt ?? new Date(), projectId: task.projectId, reportedBy: req.user!.id });
+  const delivery = task.deliveryHistory.at(-1);
+  const defect = await Defect.create({
+    ...req.body,
+    foundAt: req.body.foundAt ?? new Date(),
+    projectId: task.projectId,
+    deliveryId: delivery?._id,
+    originalAssigneeId: delivery?.contributors[0]?.employeeId ?? task.assigneeId,
+    originalAssigneeName: delivery?.contributors[0]?.name ?? task.assigneeName,
+    reportedBy: req.user!.id,
+    statusHistory: [{
+      toStatus: 'reported',
+      changedBy: req.user!.id,
+      changedAt: new Date(),
+      reason: 'Defect reported',
+    }],
+  });
   await recordAudit({
     actorId: new mongoose.Types.ObjectId(req.user!.id),
     entityType: 'Defect',
@@ -60,6 +76,13 @@ export const reviewDefect: RequestHandler = async (req, res) => {
   defect.status = req.body.status;
   defect.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
   defect.reviewReason = req.body.reviewReason;
+  defect.statusHistory.push({
+    fromStatus: previousStatus,
+    toStatus: defect.status,
+    changedBy: new mongoose.Types.ObjectId(req.user!.id),
+    changedAt: new Date(),
+    reason: defect.reviewReason,
+  });
   await defect.save();
 
   let taskStatus: string | undefined;
@@ -114,6 +137,13 @@ export const submitDefectResolution: RequestHandler = async (req, res) => {
   defect.resolutionHours = req.body.resolutionHours;
   defect.resolutionSubmittedAt = new Date();
   defect.resolutionSubmittedBy = new mongoose.Types.ObjectId(req.user!.id);
+  defect.statusHistory.push({
+    fromStatus: defect.status,
+    toStatus: 'under_review',
+    changedBy: new mongoose.Types.ObjectId(req.user!.id),
+    changedAt: defect.resolutionSubmittedAt,
+    reason: 'Employee submitted fix for review',
+  });
   defect.status = 'under_review';
   await defect.save();
   await recordAudit({
@@ -135,129 +165,45 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
   if (defect.status !== 'under_review' || !defect.resolutionDescription || !defect.resolutionEvidence || !defect.resolutionHours) throw new HttpError(400, 'Employee resolution, evidence, and time spent must be submitted before acceptance');
   const task = await Task.findById(defect.taskId).session(session);
   if (!task) throw new HttpError(404, 'Project delivery not found');
-  const employee = await User.findById(task.assigneeId).session(session).select('hourlyRate baseSalary payrollCurrency').lean();
-  if (!employee) throw new HttpError(404, 'Assigned employee account not found');
-  const existingDefectEntries = await TimeEntry.find({ defectId: defect._id }).session(session).select('_id');
-  const reviewedAt = new Date();
-  if (existingDefectEntries.length === 0) {
-    const timeEntry = await TimeEntry.create([{
-    taskId: defect.taskId,
+  const existingCorrectiveEntry = await TimeEntry.findOne({
     defectId: defect._id,
-    employeeId: task.assigneeId,
-    date: reviewedAt,
-    hours: defect.resolutionHours,
-    description: defect.resolutionDescription,
     category: 'corrective_work',
-    approvalStatus: 'approved',
-    reviewedBy: req.user!.id,
-    reviewedAt,
-    reviewReason: req.body.reviewReason || 'Corrective time verified with accepted defect fix',
-    }], { session }).then(([created]) => created);
-    const hourlyRate = employee.hourlyRate ?? 1000;
-    const salaryCalculation = calculateDefectSalaryAdjustment(defect.resolutionHours, defect.estimatedResolutionHours, hourlyRate);
-    const amount = Math.round(defect.resolutionHours * hourlyRate * 100) / 100;
-    const signedAmount = defect.cause === 'code_defect' ? -amount : amount;
-    const baseSalary = employee.baseSalary ?? 50000;
-    const periodStart = new Date(reviewedAt.getFullYear(), reviewedAt.getMonth() + 1, 1);
-    const periodEnd = new Date(reviewedAt.getFullYear(), reviewedAt.getMonth() + 2, 0);
-    const previousAdjustments = await PayrollAdjustment.find({
+  }).session(session);
+  if (!existingCorrectiveEntry) {
+    const employee = await User.findById(task.assigneeId).session(session)
+      .select('hourlyRate baseSalary payrollCurrency').lean();
+    if (!employee) throw new HttpError(404, 'Assigned employee account not found');
+    const [timeEntry] = await TimeEntry.create([{
+      taskId: defect.taskId,
+      defectId: defect._id,
       employeeId: task.assigneeId,
-      periodStart,
-      status: 'approved',
-    }).session(session).select('adjustmentType proposedAmount').lean();
-    const adjustmentType = signedAmount > 0 ? 'credit' : 'debit';
-    const nextMonthSalary = calculateNextMonthSalary(baseSalary, [
-      ...previousAdjustments,
-      { adjustmentType, proposedAmount: amount },
-    ]);
-    const adjustment = await PayrollAdjustment.create([{
-      employeeId: task.assigneeId,
-      periodStart,
-      periodEnd,
-      currency: employee.payrollCurrency ?? 'INR',
-      approvedTimeEntryIds: [timeEntry._id],
-      configuredHourlyRate: hourlyRate,
-      ...calculateProposedAdjustment([{
-        id: timeEntry._id,
-        taskId: defect.taskId,
-        defectId: defect._id,
-        date: reviewedAt,
-        hours: defect.resolutionHours,
-      }], hourlyRate),
-      proposedAmount: amount,
-      baseSalary,
-      nextMonthSalary,
-      adjustmentType,
-      status: 'pending_review',
-      reviewReason: req.body.reviewReason || `Proposed ${signedAmount < 0 ? 'human-error salary deduction' : 'natural/technical rework credit'} for ${defect.resolutionHours} approved hours; payroll review required`,
-    }], { session }).then(([created]) => created);
-    timeEntry.payrollAdjustmentId = adjustment._id;
-    await timeEntry.save({ session });
+      date: defect.resolutionSubmittedAt ?? new Date(),
+      hours: defect.resolutionHours,
+      description: defect.resolutionDescription,
+      category: 'corrective_work',
+      source: 'resolution_submission',
+      compensationHourlyRate: employee.hourlyRate ?? 1000,
+      compensationBaseSalary: employee.baseSalary ?? 50000,
+      compensationCurrency: employee.payrollCurrency ?? 'INR',
+      approvalStatus: 'pending',
+    }], { session });
     await recordAudit({
       actorId: new mongoose.Types.ObjectId(req.user!.id),
-      entityType: 'PayrollAdjustment',
-      entityId: adjustment._id,
-      action: 'salary_adjustment_proposed',
-      after: {
-        employeeId: task.assigneeId,
-        defectId: defect._id,
-        hours: defect.resolutionHours,
-        amount: adjustment.proposedAmount,
-        nextMonthSalary: adjustment.nextMonthSalary,
-        status: adjustment.status,
-      },
-      reason: adjustment.reviewReason,
+      entityType: 'TimeEntry',
+      entityId: timeEntry._id,
+      action: 'corrective_time_submitted_for_review',
+      after: { taskId: task._id, defectId: defect._id, hours: timeEntry.hours, source: timeEntry.source },
+      reason: 'Hours from fix submission require separate time approval',
     }, session);
-    if (salaryCalculation.requiresApproval) {
-      const projectedSalary = calculateNextMonthSalary(baseSalary, [
-        ...previousAdjustments,
-        { adjustmentType, proposedAmount: amount },
-        { adjustmentType: 'debit', proposedAmount: salaryCalculation.overrunPenalty },
-      ]);
-      const [overrunAdjustment] = await PayrollAdjustment.create([{
-        employeeId: task.assigneeId,
-        periodStart,
-        periodEnd,
-        currency: employee.payrollCurrency ?? 'INR',
-        approvedTimeEntryIds: [timeEntry._id],
-        eligibleCorrectiveHours: salaryCalculation.overrunHours,
-        configuredHourlyRate: hourlyRate,
-        calculationBreakdown: [{
-          timeEntryId: timeEntry._id,
-          taskId: defect.taskId,
-          defectId: defect._id,
-          date: reviewedAt,
-          hours: salaryCalculation.overrunHours,
-          hourlyRate,
-          amount: salaryCalculation.overrunPenalty,
-        }],
-        proposedAmount: salaryCalculation.overrunPenalty,
-        overrunHours: salaryCalculation.overrunHours,
-        overrunPenalty: salaryCalculation.overrunPenalty,
-        baseSalary,
-        nextMonthSalary: projectedSalary,
-        adjustmentType: 'debit',
-        status: 'pending_review',
-        reviewReason: `Proposed ${employee.payrollCurrency ?? 'INR'} ${salaryCalculation.overrunPenalty.toFixed(2)} deduction for ${salaryCalculation.overrunHours.toFixed(2)} hours over the ${defect.estimatedResolutionHours} hour AI estimate; pending payroll approval`,
-      }], { session });
-      await recordAudit({
-        actorId: new mongoose.Types.ObjectId(req.user!.id),
-        entityType: 'PayrollAdjustment',
-        entityId: overrunAdjustment._id,
-        action: 'salary_adjustment_proposed',
-        after: {
-          employeeId: task.assigneeId,
-          defectId: defect._id,
-          overrunHours: salaryCalculation.overrunHours,
-          overrunPenalty: salaryCalculation.overrunPenalty,
-          nextMonthSalary: overrunAdjustment.nextMonthSalary,
-          status: overrunAdjustment.status,
-        },
-        reason: overrunAdjustment.reviewReason,
-      }, session);
-    }
   }
   defect.status = 'resolved';
+  defect.statusHistory.push({
+    fromStatus: 'under_review',
+    toStatus: 'resolved',
+    changedBy: new mongoose.Types.ObjectId(req.user!.id),
+    changedAt: new Date(),
+    reason: req.body.reviewReason || 'Fix accepted',
+  });
   defect.reviewedBy = new mongoose.Types.ObjectId(req.user!.id);
   defect.reviewReason = req.body.reviewReason;
   await defect.save({ session });
@@ -271,6 +217,17 @@ export const acceptDefectResolution: RequestHandler = async (req, res) => {
     const previousStatus = task.status;
     const changedAt = new Date();
     task.status = 'closed';
+    const contributors = await User.find({
+      _id: { $in: task.contributorIds.length ? task.contributorIds : [task.assigneeId] },
+    }).select('_id name').session(session).lean();
+    task.deliveryHistory.push({
+      version: task.deliveryHistory.length + 1,
+      projectId: task.projectId,
+      taskTitle: task.title,
+      deliveredAt: changedAt,
+      acceptedBy: new mongoose.Types.ObjectId(req.user!.id),
+      contributors: contributors.map((user) => ({ employeeId: user._id, name: user.name })),
+    });
     task.statusHistory.push({
       fromStatus: previousStatus,
       toStatus: 'closed',
@@ -326,6 +283,8 @@ export const backfillResolvedDefectHours: RequestHandler = async (req, res) => {
       'calculationBreakdown.defectId': defect._id,
     }).session(session);
     if (existingAdjustment) throw new HttpError(409, 'A salary adjustment already exists for this defect');
+    const existingEntry = await TimeEntry.findOne({ defectId: defect._id, category: 'corrective_work' }).session(session);
+    if (existingEntry) throw new HttpError(409, 'Corrective time is already recorded for this defect; review the existing time entry instead');
     const reviewedAt = new Date();
     const hours = req.body.hours as number;
     const timeEntry = await TimeEntry.create([{
@@ -336,20 +295,30 @@ export const backfillResolvedDefectHours: RequestHandler = async (req, res) => {
       hours,
       description: defect.resolutionDescription || 'Verified corrective work for previously resolved defect',
       category: 'corrective_work',
+      source: 'manager_backfill',
+      compensationHourlyRate: employee.hourlyRate ?? 1000,
+      compensationBaseSalary: employee.baseSalary ?? 50000,
+      compensationCurrency: employee.payrollCurrency ?? 'INR',
       approvalStatus: 'approved',
       reviewedBy: new mongoose.Types.ObjectId(req.user!.id),
       reviewedAt,
       reviewReason: req.body.reviewReason,
     }], { session }).then(([created]) => created);
     const hourlyRate = employee.hourlyRate ?? 1000;
-    const amount = Math.round(hours * hourlyRate * 100) / 100;
-    const signedAmount = defect.cause === 'code_defect' ? -amount : amount;
+    const calculation = calculateReworkPayroll([{
+      id: timeEntry._id,
+      taskId: defect.taskId,
+      defectId: defect._id,
+      date: reviewedAt,
+      hours,
+      cause: defect.cause,
+      hourlyRate,
+    }]);
     const baseSalary = employee.baseSalary ?? 50000;
     const periodStart = new Date(reviewedAt.getFullYear(), reviewedAt.getMonth() + 1, 1);
     const periodEnd = new Date(reviewedAt.getFullYear(), reviewedAt.getMonth() + 2, 0);
     const previousAdjustments = await PayrollAdjustment.find({ employeeId: task.assigneeId, periodStart, status: 'approved' }).session(session).select('adjustmentType proposedAmount').lean();
-    const cumulative = previousAdjustments.reduce((total, adjustment) => total + (adjustment.adjustmentType === 'credit' ? adjustment.proposedAmount : adjustment.adjustmentType === 'debit' ? -adjustment.proposedAmount : 0), 0) + signedAmount;
-    const nextMonthSalary = Math.max(0, Math.round((baseSalary + cumulative + Number.EPSILON) * 100) / 100);
+    const nextMonthSalary = calculateNextMonthSalary(baseSalary, [...previousAdjustments, calculation]);
     const adjustment = await PayrollAdjustment.create([{
       employeeId: task.assigneeId,
       periodStart,
@@ -357,11 +326,9 @@ export const backfillResolvedDefectHours: RequestHandler = async (req, res) => {
       currency: employee.payrollCurrency ?? 'INR',
       approvedTimeEntryIds: [timeEntry._id],
       configuredHourlyRate: hourlyRate,
-      ...calculateProposedAdjustment([{ id: timeEntry._id, taskId: defect.taskId, defectId: defect._id, date: reviewedAt, hours }], hourlyRate),
-      proposedAmount: amount,
+      ...calculation,
       baseSalary,
       nextMonthSalary,
-      adjustmentType: signedAmount > 0 ? 'credit' : 'debit',
       status: 'pending_review',
       reviewReason: req.body.reviewReason,
     }], { session }).then(([created]) => created);
@@ -374,7 +341,7 @@ export const backfillResolvedDefectHours: RequestHandler = async (req, res) => {
       entityType: 'PayrollAdjustment',
       entityId: adjustment._id,
       action: 'salary_adjustment_proposed',
-      after: { employeeId: task.assigneeId, defectId: defect._id, hours, amount, nextMonthSalary, status: adjustment.status },
+      after: { employeeId: task.assigneeId, defectId: defect._id, hours, amount: adjustment.proposedAmount, nextMonthSalary, status: adjustment.status },
       reason: req.body.reviewReason,
     }, session);
     await session.commitTransaction();

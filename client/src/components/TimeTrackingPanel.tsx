@@ -18,7 +18,7 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
   const [hours, setHours] = useState('')
   const [description, setDescription] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const completedTasks = tasks.filter((task) => task.status === 'completed' || task.status === 'reopened' || task.status === 'under_fix')
+  const eligibleTasks = tasks.filter((task) => task.assigneeId === currentUser.id && (task.status === 'reopened' || task.status === 'under_fix'))
   const eligibleDefects = defects.filter((defect) => defect.status === 'approved' && defect.taskId === taskId)
   const canReview = currentUser.role === 'manager' || currentUser.role === 'admin'
 
@@ -62,7 +62,7 @@ export function TimeTrackingPanel({ tasks, defects, entries, onChanged, onNotify
   return <section className="workflow-grid">
     <article className="surface workflow-form"><div className="workflow-title"><div className="metric-icon metric-lime"><Clock3 size={16} /></div><div><h2>Log corrective time</h2><p>Only approved defects can receive corrective work.</p></div></div><form onSubmit={submit}>
       <div className="demo-hint"><span>Logging as</span><strong>{currentUser.name}</strong><small>{currentUser.role}</small></div>
-      <label>Completed task<select required value={taskId} onChange={(event) => { setTaskId(event.target.value); setDefectId('') }}><option value="">Select a task</option>{completedTasks.map((task) => <option key={task._id} value={task._id}>{task.title}</option>)}</select></label>
+      <label>Reopened task<select required value={taskId} onChange={(event) => { setTaskId(event.target.value); setDefectId('') }}><option value="">Select a reopened or under-fix task</option>{eligibleTasks.map((task) => <option key={task._id} value={task._id}>{task.title}</option>)}</select></label>
       <label>Approved defect<select required value={defectId} onChange={(event) => setDefectId(event.target.value)}><option value="">Select a defect</option>{eligibleDefects.map((defect) => <option key={defect._id} value={defect._id}>{defect.title}</option>)}</select></label>
       <div className="form-row"><label>Date<input required type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>Hours<input required type="number" min="0.01" max="24" step="0.01" value={hours} onChange={(event) => setHours(event.target.value)} placeholder="0.00" /></label></div>
       <label>Description<textarea required minLength={1} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the corrective work" /></label>

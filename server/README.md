@@ -38,7 +38,10 @@ privately. Review and payroll routes require manager or admin access.
 - `PATCH /api/time-entries/:id/review`
 - `POST /api/payroll/calculate`
 - `GET /api/payroll`
+- `GET /api/payroll/employees`
 - `GET /api/payroll/:id`
+- `POST /api/payroll/:id/dispute`
+- `PATCH /api/payroll/:id/dispute`
 - `PATCH /api/payroll/:id/review`
 - `PATCH /api/payroll/:id/void`
 - `GET /api/audit-logs`
@@ -66,22 +69,38 @@ Defects can only be reported for completed tasks. The task's `projectId` is
 always used when creating a defect. An approved defect reopens its task while
 preserving `originalCompletedAt`; an exemption requires `reviewReason`.
 
-Corrective time entries require an approved defect. Payroll calculation uses
-only approved, unreserved corrective entries in the selected employee/date
-period and stores the exact calculation lines. Reservation and adjustment
-creation run in a MongoDB transaction, so a time entry cannot be included in
-two concurrent adjustments. Rework proposals use the employee's configured
-hourly rate, salary, and currency (legacy accounts retain the INR defaults).
-Every proposal remains pending until a manager or administrator records a
-reason and approves or rejects it. Employees can see pending proposals and
-their task/module-level calculation lines in Salary adjustments; approval
-records an audit entry but does not initiate a bank payment.
+Employees can log corrective time only against their assigned task while it is
+reopened or under fix, and only for an approved defect linked to that task.
+Entries remain separately reviewable. Payroll calculation is a distinct
+manager/admin monthly action using approved, unreserved corrective entries in
+the selected employee/date period; it stores exact calculation lines and
+reserves entries transactionally to prevent duplicate proposals. The monthly
+payroll workspace loads active employee compensation settings and creates the
+proposal for review. Rework proposals use the employee's configured hourly
+rate, salary, and currency (legacy accounts retain the INR defaults).
+Employees can dispute a pending deduction with a written reason. A manager or
+administrator must resolve the dispute before reviewing the proposal;
+accepting the dispute rejects the proposal, while denying it returns the
+proposal to normal payroll review. Each action is audited. Approval records the
+decision but does not initiate a bank payment.
 
-Tasks keep committed dates, completion timestamps, and status-change history.
-The task list includes lifecycle history with actor names and reasons when
-available. The Quality intelligence view summarizes reopen rates, fix time,
-rework by module/project/employee, and monthly approved savings and pending
-payroll proposals.
+Tasks keep committed dates, completion timestamps, delivery snapshots, and
+status-change history. Accepted deliveries retain their task title, date,
+contributors, and accepting manager; defect records retain the linked delivery
+and original assignee. The task list includes lifecycle history with actor
+names and reasons when available. The Quality intelligence view summarizes
+reopen rates, fix time, rework by module/project/employee, and monthly approved
+savings and pending payroll proposals.
+
+Corrective entries keep their source, employee compensation snapshot, defect
+cause, approval state, and payroll reservation. A manager can approve or reject
+proposals with a reason, and each decision is audited. Legacy tasks without
+delivery snapshots use the available task assignee as a fallback, so historical
+contributor attribution is not guaranteed for records created before snapshots
+were introduced. Payroll adjustments are reviewed proposals; approval records
+the decision but does not apply wages in an external payroll provider or
+transfer funds. Connect a payroll provider and agree the organization's
+deduction policy before representing a proposal as an applied payroll change.
 
 Set a long random `JWT_SECRET` in the server environment. JWTs expire after
 eight hours. The API derives actor identities from the verified token and

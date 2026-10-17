@@ -12,6 +12,7 @@ export interface TaskDocument extends Document {
   reviewedBy?: Types.ObjectId;
   assigneeId: Types.ObjectId;
   assigneeName: string;
+  contributorIds: Types.ObjectId[];
   status: TaskStatus;
   originalCompletedAt?: Date;
   currentCompletedAt?: Date;
@@ -21,6 +22,15 @@ export interface TaskDocument extends Document {
     changedBy: Types.ObjectId;
     changedAt: Date;
     reason?: string;
+  }>;
+  deliveryHistory: Array<{
+    _id?: Types.ObjectId;
+    version: number;
+    projectId: Types.ObjectId;
+    taskTitle: string;
+    deliveredAt: Date;
+    acceptedBy: Types.ObjectId;
+    contributors: Array<{ employeeId: Types.ObjectId; name: string }>;
   }>;
   createdBy: Types.ObjectId;
   createdAt: Date;
@@ -39,6 +49,7 @@ const taskSchema = new Schema<TaskDocument>(
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     assigneeId: { type: Schema.Types.ObjectId, required: true, ref: 'User', index: true },
     assigneeName: { type: String, required: true, trim: true, minlength: 1, maxlength: 160 },
+    contributorIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     status: { type: String, enum: taskStatuses, default: 'assigned', required: true, index: true },
     originalCompletedAt: { type: Date },
     currentCompletedAt: { type: Date },
@@ -48,6 +59,17 @@ const taskSchema = new Schema<TaskDocument>(
       changedBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
       changedAt: { type: Date, required: true, default: Date.now },
       reason: { type: String, trim: true, maxlength: 2000 },
+    }],
+    deliveryHistory: [{
+      version: { type: Number, required: true, min: 1 },
+      projectId: { type: Schema.Types.ObjectId, required: true, ref: 'Project' },
+      taskTitle: { type: String, required: true, trim: true, maxlength: 200 },
+      deliveredAt: { type: Date, required: true },
+      acceptedBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
+      contributors: [{
+        employeeId: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
+        name: { type: String, required: true, trim: true, maxlength: 160 },
+      }],
     }],
     createdBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
   },

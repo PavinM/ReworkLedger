@@ -42,6 +42,16 @@ export type Task = {
     changedAt: string
     reason?: string
   }>
+  deliveryHistory?: Array<{
+    _id: string
+    version: number
+    projectId: string
+    taskTitle: string
+    deliveredAt: string
+    acceptedBy: string
+    acceptedByName?: string
+    contributors: Array<{ employeeId: string; name: string }>
+  }>
   createdBy: string
   createdAt: string
   updatedAt: string
@@ -51,6 +61,9 @@ export type Defect = {
   _id: string
   taskId: string
   projectId: string
+  deliveryId?: string
+  originalAssigneeId?: string
+  originalAssigneeName?: string
   analysisScanId?: string
   analysisFindingId?: string
   title: string
@@ -67,6 +80,13 @@ export type Defect = {
   cause: 'code_defect' | 'requirement_change' | 'external_dependency' | 'other'
   foundAt?: string
   status: 'reported' | 'under_review' | 'approved' | 'exempted' | 'resolved'
+  statusHistory?: Array<{
+    fromStatus?: Defect['status']
+    toStatus: Defect['status']
+    changedBy: string
+    changedAt: string
+    reason?: string
+  }>
   reportedBy: string
   reviewedBy?: string
   reviewReason?: string
@@ -79,10 +99,15 @@ export type TimeEntry = {
   taskId: string
   defectId?: string
   employeeId: string
+  employeeName?: string
   date: string
   hours: number
   description?: string
   category: 'regular_work' | 'corrective_work'
+  source?: 'manual' | 'resolution_submission' | 'manager_backfill'
+  compensationHourlyRate?: number
+  compensationBaseSalary?: number
+  compensationCurrency?: string
   approvalStatus: 'pending' | 'approved' | 'rejected'
   reviewedBy?: string
   reviewedAt?: string
@@ -125,8 +150,22 @@ export type PayrollAdjustment = {
   reviewedBy?: string
   reviewedAt?: string
   reviewReason?: string
+  disputeStatus?: 'none' | 'pending' | 'accepted' | 'denied'
+  disputeReason?: string
+  disputedAt?: string
+  disputeReviewedBy?: string
+  disputeReviewedAt?: string
+  disputeResolution?: string
   createdAt: string
   updatedAt: string
+}
+
+export type PayrollEmployeeOption = {
+  id: string
+  name: string
+  hourlyRate: number
+  baseSalary: number
+  payrollCurrency: string
 }
 
 export type AuthUser = { id: string; name: string; email: string; role: 'employee' | 'manager' | 'admin' }
@@ -336,12 +375,21 @@ export const api = {
     body: JSON.stringify(payload),
   }),
   listPayroll: (signal?: AbortSignal) => request<PayrollAdjustment[]>('/api/payroll', { signal }),
+  listPayrollEmployees: (signal?: AbortSignal) => request<PayrollEmployeeOption[]>('/api/payroll/employees', { signal }),
   listAudit: (signal?: AbortSignal) => request<AuditLog[]>('/api/audit-logs', { signal }),
   calculatePayroll: (payload: { employeeId: string; periodStart: string; periodEnd: string; currency: string; configuredHourlyRate: number; baseSalary: number }) => request<PayrollAdjustment>('/api/payroll/calculate', {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
   reviewPayroll: (adjustmentId: string, payload: { status: 'approved' | 'rejected'; reviewedBy: string; reviewReason: string }) => request<PayrollAdjustment>(`/api/payroll/${adjustmentId}/review`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }),
+  submitPayrollDispute: (adjustmentId: string, reason: string) => request<PayrollAdjustment>(`/api/payroll/${adjustmentId}/dispute`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  }),
+  reviewPayrollDispute: (adjustmentId: string, payload: { decision: 'accepted' | 'denied'; resolution: string }) => request<PayrollAdjustment>(`/api/payroll/${adjustmentId}/dispute`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   }),

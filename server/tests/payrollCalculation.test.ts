@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateDefectSalaryAdjustment, calculateNextMonthSalary, calculateProposedAdjustment, roundMoney } from '../src/services/payrollCalculation.js';
+import { calculateReworkPayroll } from '../src/services/reworkPayroll.js';
 import { canReviewTimeEntry, validateTimeEntryEligibility } from '../src/services/timeEntryRules.js';
-import { calculatePayrollSchema, createDefectSchema, createTimeEntrySchema, reviewPayrollSchema } from '../src/validation/schemas.js';
+import { calculatePayrollSchema, createDefectSchema, createTimeEntrySchema, payrollDisputeSchema, reviewPayrollDisputeSchema, reviewPayrollSchema } from '../src/validation/schemas.js';
 
 const ids = {
   first: '507f1f77bcf86cd799439011',
@@ -24,6 +25,24 @@ test('calculates a proposed adjustment from approved corrective hours', () => {
   assert.equal(result.calculationBreakdown[0].amount, 100);
 });
 
+test('calculates rework payroll consistently using frozen per-entry rates and defect causes', () => {
+  const proposal = calculateReworkPayroll([
+    { id: objectId(ids.first), taskId: objectId(ids.second), defectId: objectId(ids.first), date: new Date('2026-05-01'), hours: 2, cause: 'code_defect', hourlyRate: 50 },
+    { id: objectId(ids.second), taskId: objectId(ids.second), defectId: objectId(ids.second), date: new Date('2026-05-02'), hours: 1, cause: 'requirement_change', hourlyRate: 75 },
+  ]);
+
+  assert.equal(proposal.eligibleCorrectiveHours, 3);
+  assert.equal(proposal.calculationBreakdown[0].amount, 100);
+  assert.equal(proposal.calculationBreakdown[1].amount, 75);
+  assert.equal(proposal.proposedAmount, 25);
+  assert.equal(proposal.adjustmentType, 'debit');
+});
+
+test('rejects duplicate time entries in a rework payroll proposal', () => {
+  const input = { id: objectId(ids.first), taskId: objectId(ids.second), defectId: objectId(ids.first), date: new Date(), hours: 1, cause: 'code_defect' as const, hourlyRate: 10 };
+  assert.throws(() => calculateReworkPayroll([input, input]), /cannot be included more than once/);
+});
+
 test('rounds money consistently and rejects duplicate time entries', () => {
   assert.equal(roundMoney(10.005), 10.01);
   assert.throws(() => calculateProposedAdjustment([
@@ -35,7 +54,9 @@ test('rounds money consistently and rejects duplicate time entries', () => {
 test('requires an approved defect for corrective time', () => {
   assert.equal(validateTimeEntryEligibility('corrective_work', false), 'Corrective work must reference a defect');
   assert.equal(validateTimeEntryEligibility('corrective_work', true, 'exempted'), 'Defect is not eligible for corrective work');
-  assert.equal(validateTimeEntryEligibility('corrective_work', true, 'approved'), undefined);
+  assert.equal(validateTimeEntryEligibility('corrective_work', true, 'approved', 'completed'), 'Corrective work can only be logged while the task is reopened or under fix');
+  assert.equal(validateTimeEntryEligibility('corrective_work', true, 'approved', 'reopened'), undefined);
+  assert.equal(validateTimeEntryEligibility('corrective_work', true, 'approved', 'under_fix'), undefined);
 });
 
 test('prevents self-review and review after a terminal decision', () => {
@@ -67,6 +88,13 @@ test('requires a reason for every payroll decision', () => {
   assert.equal(reviewPayrollSchema.safeParse({ ...review, reviewReason: 'Verified against the approved corrective work.' }).success, true);
   assert.equal(reviewPayrollSchema.safeParse(review).success, false);
   assert.equal(reviewPayrollSchema.safeParse({ ...review, reviewReason: ' ' }).success, false);
+});
+
+test('requires a reason and manager resolution for payroll disputes', () => {
+  assert.equal(payrollDisputeSchema.safeParse({ reason: ' ' }).success, false);
+  assert.equal(payrollDisputeSchema.safeParse({ reason: 'Hours include work outside this defect' }).success, true);
+  assert.equal(reviewPayrollDisputeSchema.safeParse({ decision: 'accepted', resolution: '' }).success, false);
+  assert.equal(reviewPayrollDisputeSchema.safeParse({ decision: 'denied', resolution: 'The approved hours match the submitted log' }).success, true);
 });
 
 test('calculation engine only processes the entries it receives', () => {

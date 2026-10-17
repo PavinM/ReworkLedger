@@ -14,8 +14,9 @@ test('requires a reason when exempting a defect', () => {
   assert.equal(validateReviewDecision('exempted', 'Not reproducible in production'), undefined);
 });
 
-test('approved rework reopens only a completed task', () => {
+test('approved rework reopens a completed or accepted task', () => {
   assert.equal(shouldReopenTask('approved', 'completed'), true);
+  assert.equal(shouldReopenTask('approved', 'closed'), true);
   assert.equal(shouldReopenTask('approved', 'in_progress'), false);
   assert.equal(shouldReopenTask('exempted', 'completed'), false);
 });

@@ -11,6 +11,9 @@ import {
 export interface DefectDocument extends Document {
   taskId: Types.ObjectId;
   projectId: Types.ObjectId;
+  deliveryId?: Types.ObjectId;
+  originalAssigneeId?: Types.ObjectId;
+  originalAssigneeName?: string;
   analysisScanId?: Types.ObjectId;
   analysisFindingId?: Types.ObjectId;
   title: string;
@@ -28,6 +31,13 @@ export interface DefectDocument extends Document {
   cause: DefectCause;
   foundAt: Date;
   status: DefectStatus;
+  statusHistory: Array<{
+    fromStatus?: DefectStatus;
+    toStatus: DefectStatus;
+    changedBy: Types.ObjectId;
+    changedAt: Date;
+    reason?: string;
+  }>;
   reportedBy: Types.ObjectId;
   reviewedBy?: Types.ObjectId;
   reviewReason?: string;
@@ -39,6 +49,9 @@ const defectSchema = new Schema<DefectDocument>(
   {
     taskId: { type: Schema.Types.ObjectId, required: true, ref: 'Task', index: true },
     projectId: { type: Schema.Types.ObjectId, required: true, ref: 'Project', index: true },
+    deliveryId: { type: Schema.Types.ObjectId },
+    originalAssigneeId: { type: Schema.Types.ObjectId, ref: 'User' },
+    originalAssigneeName: { type: String, trim: true, maxlength: 160 },
     analysisScanId: { type: Schema.Types.ObjectId, ref: 'AnalysisScan', index: true },
     analysisFindingId: { type: Schema.Types.ObjectId, ref: 'AnalysisScan' },
     title: { type: String, required: true, trim: true, minlength: 1, maxlength: 200 },
@@ -56,6 +69,13 @@ const defectSchema = new Schema<DefectDocument>(
     cause: { type: String, enum: defectCauses, required: true },
     foundAt: { type: Date, required: true, default: Date.now, index: true },
     status: { type: String, enum: defectStatuses, default: 'reported', required: true, index: true },
+    statusHistory: [{
+      fromStatus: { type: String, enum: defectStatuses },
+      toStatus: { type: String, enum: defectStatuses, required: true },
+      changedBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
+      changedAt: { type: Date, required: true, default: Date.now },
+      reason: { type: String, trim: true, maxlength: 2000 },
+    }],
     reportedBy: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewReason: { type: String, trim: true, maxlength: 2000 },

@@ -21,6 +21,7 @@ export const createTaskSchema = z.object({
   committedAt: z.coerce.date().optional(),
   assigneeId: objectId,
   assigneeName: z.string().trim().min(1).max(160),
+  contributorIds: z.array(objectId).max(50).optional(),
   status: z.enum(taskStatuses).optional(),
   createdBy: objectId,
 });
@@ -61,7 +62,7 @@ export const reviewDefectSchema = z.object({
   reviewedBy: objectId,
   reviewReason: z.string().trim().max(2000).optional(),
 }).superRefine((value, context) => {
-  if (value.status === 'exempted' && !value.reviewReason) {
+  if (value.status === 'exempted' && !value.reviewReason?.trim()) {
     context.addIssue({ code: 'custom', path: ['reviewReason'], message: 'An exemption reason is required' });
   }
 });
@@ -148,6 +149,15 @@ export const reviewPayrollSchema = z.object({
 export const voidPayrollSchema = z.object({
   reviewedBy: objectId,
   reviewReason: z.string().trim().min(1).max(2000),
+});
+
+export const payrollDisputeSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+});
+
+export const reviewPayrollDisputeSchema = z.object({
+  decision: z.enum(['accepted', 'denied']),
+  resolution: z.string().trim().min(1).max(2000),
 });
 
 export const loginSchema = z.object({

@@ -1,5 +1,6 @@
 import { Schema, model, type Document, type Model, type Types } from 'mongoose';
 import { payrollStatuses, type PayrollStatus } from '../types/domain.js';
+import type { DefectCause } from '../types/domain.js';
 
 export interface CalculationLine {
   timeEntryId: Types.ObjectId;
@@ -9,6 +10,7 @@ export interface CalculationLine {
   hours: number;
   hourlyRate: number;
   amount: number;
+  cause?: DefectCause;
 }
 
 export interface PayrollAdjustmentDocument extends Document {
@@ -30,6 +32,12 @@ export interface PayrollAdjustmentDocument extends Document {
   reviewedBy?: Types.ObjectId;
   reviewedAt?: Date;
   reviewReason?: string;
+  disputeStatus: 'none' | 'pending' | 'accepted' | 'denied';
+  disputeReason?: string;
+  disputedAt?: Date;
+  disputeReviewedBy?: Types.ObjectId;
+  disputeReviewedAt?: Date;
+  disputeResolution?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,6 +51,7 @@ const calculationLineSchema = new Schema<CalculationLine>(
     hours: { type: Number, required: true, min: 0 },
     hourlyRate: { type: Number, required: true, min: 0 },
     amount: { type: Number, required: true, min: 0 },
+    cause: { type: String, enum: ['code_defect', 'requirement_change', 'external_dependency', 'other'] },
   },
   { _id: false },
 );
@@ -67,6 +76,12 @@ const payrollAdjustmentSchema = new Schema<PayrollAdjustmentDocument>(
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: { type: Date },
     reviewReason: { type: String, trim: true, maxlength: 2000 },
+    disputeStatus: { type: String, enum: ['none', 'pending', 'accepted', 'denied'], required: true, default: 'none', index: true },
+    disputeReason: { type: String, trim: true, maxlength: 2000 },
+    disputedAt: { type: Date },
+    disputeReviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    disputeReviewedAt: { type: Date },
+    disputeResolution: { type: String, trim: true, maxlength: 2000 },
   },
   { timestamps: true },
 );

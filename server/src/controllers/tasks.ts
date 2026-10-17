@@ -12,7 +12,10 @@ export const listTasks: RequestHandler = async (req, res) => {
   const filter: Record<string, unknown> = typeof req.query.projectId === 'string' ? { projectId: req.query.projectId } : {};
   if (req.user?.role === 'employee') filter.assigneeId = req.user.id;
   const tasks = await Task.find(filter).sort({ updatedAt: -1 }).lean();
-  const actorIds = [...new Set(tasks.flatMap((task) => (task.statusHistory ?? []).map((entry) => entry.changedBy.toString())))];
+  const actorIds = [...new Set(tasks.flatMap((task) => [
+    ...(task.statusHistory ?? []).map((entry) => entry.changedBy.toString()),
+    ...(task.deliveryHistory ?? []).map((delivery) => delivery.acceptedBy.toString()),
+  ]))];
   const actors = await User.find({ _id: { $in: actorIds } }).select('_id name').lean();
   const actorNames = new Map(actors.map((actor) => [actor._id.toString(), actor.name]));
   res.json({
@@ -21,6 +24,10 @@ export const listTasks: RequestHandler = async (req, res) => {
       statusHistory: (task.statusHistory ?? []).map((entry) => ({
         ...entry,
         changedByName: actorNames.get(entry.changedBy.toString()) ?? 'Former user',
+      })),
+      deliveryHistory: (task.deliveryHistory ?? []).map((delivery) => ({
+        ...delivery,
+        acceptedByName: actorNames.get(delivery.acceptedBy.toString()) ?? 'Former user',
       })),
     })),
   });
@@ -32,6 +39,7 @@ export const createTask: RequestHandler = async (req, res) => {
   const task = await Task.create({
     ...req.body,
     createdBy: req.user!.id,
+    contributorIds: req.body.contributorIds?.length ? req.body.contributorIds : [req.body.assigneeId],
     statusHistory: [{
       toStatus: req.body.status ?? 'assigned',
       changedBy: req.user!.id,
@@ -124,12 +132,29 @@ export const reviewTask: RequestHandler = async (req, res) => {
   if (req.body.reviewStatus === 'accepted') task.status = 'closed';
   if (req.body.reviewStatus === 'changes_requested') task.status = 'under_fix';
   if (task.status !== previousStatus) {
+    const changedAt = new Date();
     task.statusHistory.push({
       fromStatus: previousStatus,
       toStatus: task.status,
       changedBy: new mongoose.Types.ObjectId(req.user!.id),
-      changedAt: new Date(),
+      changedAt,
       reason: req.body.reviewReason,
+    });
+  }
+  const acceptedAt = new Date();
+  if (req.body.reviewStatus === 'accepted') {
+    task.deliveryHistory.push({
+      version: task.deliveryHistory.length + 1,
+      projectId: task.projectId,
+      taskTitle: task.title,
+      deliveredAt: acceptedAt,
+      acceptedBy: new mongoose.Types.ObjectId(req.user!.id),
+      contributors: await User.find({
+        _id: { $in: task.contributorIds.length ? task.contributorIds : [task.assigneeId] },
+      }).select('_id name').lean().then((users) => users.map((user) => ({
+        employeeId: user._id,
+        name: user.name,
+      }))),
     });
   }
   await task.save();
