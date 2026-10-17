@@ -400,7 +400,7 @@ function App() {
             <OverviewMetric label="Completed projects" value={dataLoading ? '…' : String(projects.filter((item) => item.status === 'completed').length)} note="Accepted project deliveries" icon={Timer} accent="lime" />
             <OverviewMetric label="Open defects" value={dataLoading ? '…' : String(liveDefects.filter((defect) => !['resolved', 'exempted'].includes(defect.status)).length)} note="Live from defect API" icon={AlertCircle} accent="danger" />
             <OverviewMetric label="Projects" value={dataLoading ? '…' : String(projects.length)} note="Live from project API" icon={ClipboardCheck} accent="amber" />
-            <OverviewMetric label="Salary adjustments" value={dataLoading ? '…' : String(payrollAdjustments.length)} note="Automatic next-month changes" icon={Zap} accent="neutral" />
+            <OverviewMetric label="Salary adjustments" value={dataLoading ? '…' : String(payrollAdjustments.length)} note="Proposed next-month changes" icon={Zap} accent="neutral" />
           </section>
 
           {dataError && <div className="api-error" role="alert"><span>Unable to load live workspace data: {dataError}</span><button onClick={retryData}>Retry</button></div>}

@@ -105,18 +105,13 @@ deduction policy before representing a proposal as an applied payroll change.
 Set a long random `JWT_SECRET` in the server environment. JWTs expire after
 eight hours. The API derives actor identities from the verified token and
 
-For the local development workspace, the initial role accounts are:
-
-| Role | Email | Password |
-| --- | --- | --- |
-| Employee | `emp@gmail.com` | `123456` |
-| Manager | `man@gmail.com` | `123456` |
-| Administrator | `admin@gmail.com` | `123456` |
-
-Change these credentials before using a shared or production environment. Only
-administrators can create, activate, or deactivate employee and manager
-accounts from the Settings page. The API derives actor identities from the verified token and
-does not trust reviewer/employee IDs supplied by clients.
+No default role accounts are provisioned by the application. Public
+registration creates employee accounts; manager and administrator accounts
+must be provisioned securely out of band before the admin account-management
+workflow can be used. Only administrators can create, activate, or deactivate
+employee and manager accounts from the Settings page. The API derives actor
+identities from the verified token and does not trust reviewer/employee IDs
+supplied by clients.
 
 During non-production development, the API allows local Vite origins on
 alternate ports such as `5174`. Create real organization accounts through the
